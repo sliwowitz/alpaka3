@@ -4,6 +4,7 @@
 // Work funded by US NAS and ONRG (IMPRESS-U).
 
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -12,27 +13,30 @@
 // Minimal reference "physics"
 // ----------------------------
 //
-// This is a CPU-only, serial implementation of the core scoring:
-//   E_total = Lennard-Jones + Coulomb
-// (Additional terms can be incorporated later alongside real deck I/O and validation.)
+// CPU-only, serial implementation of the core scoring for a single pose:
+//   E_total = Lennard–Jones(12-6) + Coulomb
+// This file implements LJ and Coulomb terms; other terms can be incorporated separately if needed.
 //
-// Notes:
-// * Coordinates are in arbitrary units for now (synthetic deck).
-// * Some constants are placeholders; align with the miniBUDE reference when wiring the real deck.
+// Units:
+// * We keep k_e consistent with kJ·nm/(mol·e^2) for now (synthetic deck).
+// * With a real deck, units may be adjusted (e.g., kcal·Å) as required.
 
+// Atom parameters (per-particle)
 struct Atom
 {
     float x, y, z; // position
-    float q; // charge (e)
-    float sigma; // LJ sigma (Å)
-    float epsilon; // LJ epsilon (kcal/mol)
+    float q; // partial charge (e)
+    float sigma; // LJ sigma (Å or nm — consistent within the deck)
+    float epsilon; // LJ epsilon (kcal/mol or kJ/mol — consistent within the deck)
 };
 
+// Rigid-body pose: pure translation (rotations are not included here)
 struct Pose
 {
     float tx, ty, tz;
 };
 
+// Read-only view on the system arrays
 struct SystemView
 {
     Atom const* ligand;
@@ -41,30 +45,32 @@ struct SystemView
     std::size_t natpro;
 };
 
-// Coulomb constant
-inline constexpr float k_e = 138.935456f; // (kJ·nm)/(mol·e^2)
+// Coulomb constant (kJ·nm)/(mol·e^2). For kcal·Å you would typically use ~332.06371f.
+inline constexpr float k_e = 138.935456f;
 
-// Pairwise LJ + Coulomb between two atoms at distance r.
+// Pairwise LJ(12-6) + Coulomb for distance-squared r2 and mixed (sigma, epsilon).
 inline float pair_energy(float r2, float q1, float q2, float sigma, float epsilon)
 {
-    // Guard against r=0 in synthetic data
+    // Avoid r = 0 under synthetic inputs
     r2 = std::max(r2, 1e-12f);
     float inv_r = 1.0f / std::sqrt(r2);
+
+    // (sigma / r)
     float sr = sigma * inv_r;
     float sr2 = sr * sr;
-    float sr6 = sr2 * sr2 * sr2;
-    float sr12 = sr6 * sr6;
+    float sr6 = sr2 * sr2 * sr2; // (sigma/r)^6
+    float sr12 = sr6 * sr6; // (sigma/r)^12
 
-    // Lennard–Jones 12-6
+    // Lennard–Jones 12-6: 4*epsilon * [(sigma/r)^12 - (sigma/r)^6]
     float e_lj = 4.0f * epsilon * (sr12 - sr6);
 
-    // Coulomb
+    // Coulomb: k_e * q1*q2 / r
     float e_coul = k_e * q1 * q2 * inv_r;
 
     return e_lj + e_coul;
 }
 
-// Score one pose: translate ligand and accumulate pairwise interactions.
+// Score a single pose: translate ligand, then accumulate all pair interactions.
 inline float score_pose(SystemView const& sys, Pose const& pose)
 {
     float E = 0.0f;
@@ -72,6 +78,7 @@ inline float score_pose(SystemView const& sys, Pose const& pose)
     for(std::size_t i = 0; i < sys.natlig; ++i)
     {
         Atom const& L = sys.ligand[i];
+        // Apply translation (rotations will arrive with real deck)
         float const lx = L.x + pose.tx;
         float const ly = L.y + pose.ty;
         float const lz = L.z + pose.tz;
@@ -84,7 +91,9 @@ inline float score_pose(SystemView const& sys, Pose const& pose)
             float const dz = lz - P.z;
             float const r2 = dx * dx + dy * dy + dz * dz;
 
-            // Simple mixing for (sigma, epsilon): Lorentz–Berthelot
+            // Lorentz–Berthelot mixing:
+            //   sigma_ij = (sigma_i + sigma_j)/2
+            //   epsilon_ij = sqrt(epsilon_i * epsilon_j)
             float const sigma = 0.5f * (L.sigma + P.sigma);
             float const epsilon = std::sqrt(L.epsilon * P.epsilon);
 
