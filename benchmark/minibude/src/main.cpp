@@ -3,14 +3,13 @@
 // Author: Ivan Andriievskyi
 // Work funded by US NAS and ONRG (IMPRESS-U).
 
-#include "physics.hpp"
+#include "physics.hpp" // synthetic LJ+Coulomb path
+#include "physics_minibude.hpp" // full miniBUDE CPU serial physics
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -26,19 +25,19 @@
 // -------------------------------
 struct Args
 {
-    // common
-    std::uint64_t poses = 500000; // synthetic: number of poses
-    int runs = 5; // repeats for timing
-    std::size_t natlig = 256; // synthetic ligand atoms
-    std::size_t natpro = 4096; // synthetic protein atoms
+    // synthetic
+    std::uint64_t poses = 500000;
+    int runs = 5;
+    std::size_t natlig = 256;
+    std::size_t natpro = 4096;
     // deck
-    std::string deckDir; // if non-empty -> deck mode
+    std::string deckDir;
     // verification
-    bool verify = false; // compare energies vs ref_energies.out (deck mode)
-    double tol_pct = 0.025; // tolerance in %
-    std::size_t rows = 8; // how many mismatches to print
-    std::string dump_path; // where to dump computed energies
-    bool csv = false; // csv output for results
+    bool verify = false;
+    double tol_pct = 0.025;
+    std::size_t rows = 8;
+    std::string dump_path;
+    bool csv = false;
 };
 
 static Args parseArgs(int argc, char** argv)
@@ -104,8 +103,8 @@ static Args parseArgs(int argc, char** argv)
                       << "DECK MODE:\n"
                       << "  --deck <DIR>        directory with bm1/{ligand,protein,forcefield,poses,ref_energies}\n"
                       << "  --verify            compare energies against ref_energies.out\n"
-                      << "  --tol-pct <pct>     tolerance percent for verification (default " << a.tol_pct << ")\n"
-                      << "  --rows <N>          number of mismatches to print (default " << a.rows << ")\n"
+                      << "  --tol-pct <pct>     tolerance percent (default " << a.tol_pct << ")\n"
+                      << "  --rows <N>          how many mismatches to print (default " << a.rows << ")\n"
                       << "  --dump-energies P   write computed energies to file P\n"
                       << "  --csv               CSV summary output\n";
             std::exit(0);
@@ -126,9 +125,7 @@ static double time_ms(F&& f)
     return dt.count();
 }
 
-// -----------------------------------------------
-// Synthetic data
-// -----------------------------------------------
+// ---------------- Synthetic data ---------------
 static void makeSynthetic(
     std::size_t natlig,
     std::size_t natpro,
@@ -139,8 +136,8 @@ static void makeSynthetic(
     std::uniform_real_distribution<float> posL(-2.0f, 2.0f);
     std::uniform_real_distribution<float> posP(0.0f, 100.0f);
     std::uniform_real_distribution<float> qdist(-0.5f, 0.5f);
-    std::uniform_real_distribution<float> sdist(2.5f, 4.5f); // sigma ~ 2.5–4.5 Å
-    std::uniform_real_distribution<float> edist(0.01f, 0.20f); // epsilon ~ 0.01–0.2
+    std::uniform_real_distribution<float> sdist(2.5f, 4.5f);
+    std::uniform_real_distribution<float> edist(0.01f, 0.20f);
 
     ligand.resize(natlig);
     for(auto& a : ligand)
@@ -175,37 +172,17 @@ static void makePoses(std::uint64_t n, std::vector<Pose>& poses)
     }
 }
 
-// --------------------
-// Deck file structures
-// --------------------
-#pragma pack(push, 1)
-
-struct DeckAtom
-{
-    float x, y, z;
-    std::int32_t type;
-};
-
-struct DeckFF
-{
-    std::int32_t hbtype;
-    float radius;
-    float hphb;
-    float elsc;
-};
-
-#pragma pack(pop)
-
+// ---------------- Deck I/O helpers ------------------------------------------
 template<class T>
-static std::vector<T> readBinaryVec(const std::string& path)
+static std::vector<T> readBinaryVec(std::string const& path)
 {
     std::ifstream f(path, std::ios::binary);
     if(!f)
         throw std::runtime_error("Cannot open file: " + path);
     f.seekg(0, std::ios::end);
-    std::streampos len = f.tellg();
+    auto len = f.tellg();
     if(len % std::streamoff(sizeof(T)) != 0)
-        throw std::runtime_error("Bad file size for " + path);
+        throw std::runtime_error("Bad file size: " + path);
     std::vector<T> v(static_cast<std::size_t>(len) / sizeof(T));
     f.seekg(0, std::ios::beg);
     f.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(len));
@@ -221,57 +198,25 @@ static std::vector<float> readRefEnergiesTxt(std::string const& path)
     std::string line;
     while(std::getline(in, line))
     {
-        if(line.empty())
-            continue;
-        v.push_back(std::stof(line));
+        if(!line.empty())
+            v.push_back(std::stof(line));
     }
     return v;
 }
 
-// Build poses (Tx,Ty,Tz) from deck DOF arrays.
-// NOTE: We currently ignore rotations (Rx,Ry,Rz). Verification will not pass
-// until full physics (incl. rotations & all terms) is added.
-static void makePosesFromDeck(std::array<std::vector<float>, 6> const& dof, std::vector<Pose>& poses)
+static void splitPoses6(std::vector<float> const& flat, std::array<std::vector<float>, 6>& dof)
 {
-    std::size_t const n = dof[0].size();
-    poses.resize(n);
+    if(flat.size() % 6 != 0)
+        throw std::runtime_error("poses.in size not divisible by 6");
+    std::size_t const n = flat.size() / 6;
+    for(int k = 0; k < 6; ++k)
+        dof[k].resize(n);
     for(std::size_t i = 0; i < n; ++i)
-    {
-        poses[i] = Pose{dof[3][i], dof[4][i], dof[5][i]}; // tx, ty, tz
-    }
+        for(int k = 0; k < 6; ++k)
+            dof[k][i] = flat[i + std::size_t(k) * n];
 }
 
-// Convert deck atoms (+ FF table) to our Atom (for the current simplified physics).
-// Mapping choice (temporary!):
-//   q      <- elsc
-//   sigma  <- radius
-//   epsilon<- 0.0  (LJ disabled in this loader)
-static void deckToPhysics(
-    std::vector<DeckAtom> const& ligand_d,
-    std::vector<DeckAtom> const& protein_d,
-    std::vector<DeckFF> const& ff,
-    std::vector<Atom>& ligand,
-    std::vector<Atom>& protein)
-{
-    ligand.resize(ligand_d.size());
-    for(std::size_t i = 0; i < ligand_d.size(); ++i)
-    {
-        auto const& Ld = ligand_d[i];
-        auto const& F = ff[static_cast<std::size_t>(Ld.type)];
-        ligand[i] = Atom{Ld.x, Ld.y, Ld.z, F.elsc, F.radius, 0.0f};
-    }
-    protein.resize(protein_d.size());
-    for(std::size_t j = 0; j < protein_d.size(); ++j)
-    {
-        auto const& Pd = protein_d[j];
-        auto const& F = ff[static_cast<std::size_t>(Pd.type)];
-        protein[j] = Atom{Pd.x, Pd.y, Pd.z, F.elsc, F.radius, 0.0f};
-    }
-}
-
-// --------------------
-// Verification helpers
-// --------------------
+// ---------------- Verification ----------------------------------------------
 struct VerifyResult
 {
     bool valid;
@@ -298,17 +243,14 @@ static VerifyResult verifyEnergies(
         if(d > tol_pct && bad.size() < rows)
             bad.push_back(i);
     }
-    if(!csv)
+    if(!csv && !bad.empty())
     {
-        if(!bad.empty())
+        std::cerr << "# verification: first " << bad.size() << " mismatches (idx, got, ref, diff_%):\n";
+        for(auto idx : bad)
         {
-            std::cerr << "# verification: first " << bad.size() << " mismatches (idx, got, ref, diff_%):\n";
-            for(auto idx : bad)
-            {
-                double const denom = std::max(1.0, std::abs(double(ref[idx])));
-                double const d = std::abs(double(got[idx]) - double(ref[idx])) / denom * 100.0;
-                std::cerr << "  " << idx << ", " << got[idx] << ", " << ref[idx] << ", " << d << "\n";
-            }
+            double const denom = std::max(1.0, std::abs(double(ref[idx])));
+            double const d = std::abs(double(got[idx]) - double(ref[idx])) * 100.0 / denom;
+            std::cerr << "  " << idx << ", " << got[idx] << ", " << ref[idx] << ", " << d << "\n";
         }
     }
     return VerifyResult{maxd <= tol_pct, maxd, std::move(bad)};
@@ -321,104 +263,158 @@ int main(int argc, char** argv)
 {
     auto const args = parseArgs(argc, argv);
 
-    std::vector<Atom> ligand, protein;
-    std::vector<Pose> poses;
+    bool const deckMode = !args.deckDir.empty();
 
-    bool deckMode = !args.deckDir.empty();
-
+    // Synthetic path ( ------------------------------------
     if(!deckMode)
     {
-        // Synthetic path
+        std::vector<Atom> ligand, protein;
+        std::vector<Pose> poses;
         makeSynthetic(args.natlig, args.natpro, ligand, protein);
         makePoses(args.poses, poses);
+
+        SystemView sys{ligand.data(), ligand.size(), protein.data(), protein.size()};
+
         std::cout << "miniBUDE CPU physics (synthetic deck)\n"
                   << "poses=" << args.poses << " runs=" << args.runs << " natlig=" << args.natlig
                   << " natpro=" << args.natpro << "\n";
-    }
-    else
-    {
-        // Deck path
-        std::string const& D = args.deckDir;
-        auto ligand_d = readBinaryVec<DeckAtom>(D + "/ligand.in");
-        auto protein_d = readBinaryVec<DeckAtom>(D + "/protein.in");
-        auto ff = readBinaryVec<DeckFF>(D + "/forcefield.in");
-        std::array<std::vector<float>, 6> dof;
-        dof[0] = readBinaryVec<float>(D + "/poses.in");
-        // The deck stores poses as 6 contiguous blocks (rx,ry,rz,tx,ty,tz).
-        // The loader reads the entire file and splits it evenly into 6 arrays:
+
+        float volatile sink = 0.0f;
+        // warmup
+        for(int w = 0; w < 1; ++w)
+            for(auto const& p : poses)
+                sink += score_pose(sys, p);
+
+        std::vector<double> times_ms;
+        times_ms.reserve(args.runs);
+        for(int r = 0; r < args.runs; ++r)
         {
-            auto const flat = std::move(dof[0]);
-            if(flat.size() % 6 != 0)
-                throw std::runtime_error("poses.in size not divisible by 6");
-            std::size_t const n = flat.size() / 6;
-            for(int k = 0; k < 6; ++k)
-                dof[k].resize(n);
-            for(std::size_t i = 0; i < n; ++i)
-            {
-                for(int k = 0; k < 6; ++k)
+            double t = time_ms(
+                [&]
                 {
-                    dof[k][i] = flat[i + std::size_t(k) * n];
-                }
-            }
+                    float Eacc = 0.0f;
+                    for(auto const& p : poses)
+                        Eacc += score_pose(sys, p);
+                    sink += Eacc;
+                });
+            times_ms.push_back(t);
         }
-        std::vector<float> refE;
-        if(args.verify)
-        {
-            refE = readRefEnergiesTxt(D + "/ref_energies.out");
-        }
-        // Map deck fields to the physics parameters used here
-        deckToPhysics(ligand_d, protein_d, ff, ligand, protein);
-        makePosesFromDeck(dof, poses);
 
-        std::cout << "miniBUDE deck mode\n"
-                  << "  ligand atoms : " << ligand_d.size() << "\n"
-                  << "  protein atoms: " << protein_d.size() << "\n"
-                  << "  ff params    : " << ff.size() << "\n"
-                  << "  poses        : " << poses.size() << "\n"
-                  << (args.verify ? "  ref energies : " : "") << (args.verify ? std::to_string(refE.size()) : "")
-                  << (args.verify ? "\n" : "");
-        if(!poses.empty())
+        double mn = std::numeric_limits<double>::infinity(), mx = 0.0, sum = 0.0;
+        for(double t : times_ms)
         {
-            std::cout << "  pose[0] = { " << dof[0][0] << ", " << dof[1][0] << ", " << dof[2][0] << ", "
-                      << (int) dof[3][0] << ", " << (int) dof[4][0] << ", " << (int) dof[5][0] << " }\n";
+            mn = std::min(mn, t);
+            mx = std::max(mx, t);
+            sum += t;
         }
-        if(args.verify && refE.size() != poses.size())
+        double avg = sum / times_ms.size();
+
+        if(args.csv)
         {
-            std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count (" << poses.size()
-                      << ")\n";
+            std::cout << std::fixed << std::setprecision(3) << "min_ms,avg_ms,max_ms\n"
+                      << mn << "," << avg << "," << mx << "\n";
         }
+        else
+        {
+            std::cout << std::fixed << std::setprecision(3) << "time_ms: min/avg/max = " << mn << " / " << avg << " / "
+                      << mx << "\n";
+        }
+
+        (void) sink;
+        return 0;
     }
 
-    // Build a read-only view for scoring
-    SystemView sys{ligand.data(), ligand.size(), protein.data(), protein.size()};
+    // Deck path (full miniBUDE physics) --------------------------------------
+    std::string const& D = args.deckDir;
 
-    // --- Warm-up (no timing, avoid dead code elimination)
+    // read deck
+    auto const ligand_d = readBinaryVec<DeckAtom>(D + "/ligand.in");
+    auto const protein_d = readBinaryVec<DeckAtom>(D + "/protein.in");
+    auto const ff = readBinaryVec<FFParams>(D + "/forcefield.in");
+
+    std::array<std::vector<float>, 6> dof;
+    {
+        auto const flat = readBinaryVec<float>(D + "/poses.in");
+        splitPoses6(flat, dof); // dof[0..5] = {rx, ry, rz, tx, ty, tz}
+    }
+
+    std::vector<float> refE;
+    if(args.verify)
+    {
+        refE = readRefEnergiesTxt(D + "/ref_energies.out");
+    }
+
+    std::cout << "miniBUDE deck mode\n"
+              << "  ligand atoms : " << ligand_d.size() << "\n"
+              << "  protein atoms: " << protein_d.size() << "\n"
+              << "  ff params    : " << ff.size() << "\n"
+              << "  poses        : " << dof[0].size() << "\n"
+              << (args.verify ? "  ref energies : " : "") << (args.verify ? std::to_string(refE.size()) : "")
+              << (args.verify ? "\n" : "");
+    if(!dof[0].empty())
+    {
+        std::cout << "  pose[0] = { " << dof[0][0] << ", " << dof[1][0] << ", " << dof[2][0] << ", " << dof[3][0]
+                  << ", " << dof[4][0] << ", " << dof[5][0] << " }\n";
+    }
+
+    std::size_t const N = dof[0].size();
+
+    // warmup
     float volatile sink = 0.0f;
     for(int w = 0; w < 1; ++w)
     {
-        for(auto const& p : poses)
-            sink += score_pose(sys, p);
+        for(std::size_t i = 0; i < N; ++i)
+        {
+            sink += score_pose_minibude_serial(
+                ligand_d.data(),
+                ligand_d.size(),
+                protein_d.data(),
+                protein_d.size(),
+                ff.data(),
+                dof[0][i],
+                dof[1][i],
+                dof[2][i],
+                dof[3][i],
+                dof[4][i],
+                dof[5][i]);
+        }
     }
 
-    // --- Timed runs (aggregate only for throughput stat)
+    // timed runs
     std::vector<double> times_ms;
     times_ms.reserve(args.runs);
+    std::vector<float> energies(N, 0.0f);
     for(int r = 0; r < args.runs; ++r)
     {
         double t = time_ms(
             [&]
             {
                 float Eacc = 0.0f;
-                for(auto const& p : poses)
-                    Eacc += score_pose(sys, p);
+                for(std::size_t i = 0; i < N; ++i)
+                {
+                    float e = score_pose_minibude_serial(
+                        ligand_d.data(),
+                        ligand_d.size(),
+                        protein_d.data(),
+                        protein_d.size(),
+                        ff.data(),
+                        dof[0][i],
+                        dof[1][i],
+                        dof[2][i],
+                        dof[3][i],
+                        dof[4][i],
+                        dof[5][i]);
+                    Eacc += e;
+                    if(r == args.runs - 1)
+                        energies[i] = e; // keep last run as result
+                }
                 sink += Eacc;
             });
         times_ms.push_back(t);
     }
 
-    // --- Basic timing stats
-    double mn = std::numeric_limits<double>::infinity();
-    double mx = 0.0, sum = 0.0;
+    // timing summary
+    double mn = std::numeric_limits<double>::infinity(), mx = 0.0, sum = 0.0;
     for(double t : times_ms)
     {
         mn = std::min(mn, t);
@@ -438,14 +434,7 @@ int main(int argc, char** argv)
                   << mx << "\n";
     }
 
-    // --- Per-pose energies (for verification / dump)
-    std::vector<float> energies;
-    energies.resize(poses.size());
-    for(std::size_t i = 0; i < poses.size(); ++i)
-    {
-        energies[i] = score_pose(sys, poses[i]);
-    }
-
+    // dump energies if requested
     if(!args.dump_path.empty())
     {
         std::ofstream out(args.dump_path, std::ios::out | std::ios::trunc);
@@ -456,10 +445,15 @@ int main(int argc, char** argv)
                     : "# ERROR: failed to write " + args.dump_path + "\n");
     }
 
-    if(deckMode && args.verify)
+    // verify if requested
+    if(args.verify)
     {
-        auto const ref = readRefEnergiesTxt(args.deckDir + "/ref_energies.out");
-        auto res = verifyEnergies(ref, energies, args.tol_pct, args.rows, args.csv);
+        if(refE.size() != energies.size())
+        {
+            std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count (" << energies.size()
+                      << ")\n";
+        }
+        auto res = verifyEnergies(refE, energies, args.tol_pct, args.rows, args.csv);
         if(args.csv)
         {
             std::cout << "valid,max_diff_pct\n"
@@ -470,11 +464,6 @@ int main(int argc, char** argv)
             std::cout << "verify: { valid: " << (res.valid ? "true" : "false")
                       << ", max_diff_%: " << std::setprecision(6) << res.max_diff_pct << ", tol_%: " << args.tol_pct
                       << " }\n";
-            if(!res.valid)
-            {
-                std::cout << "# NOTE: current physics is simplified (no rotations; LJ/Coulomb mapping); "
-                             "discrepancy expected until full model is implemented.\n";
-            }
         }
     }
 
