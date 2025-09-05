@@ -1,5 +1,6 @@
 #
-# Copyright 2025 Andriievskyi Ivan
+# Copyright 2025 Ivan Andriievskyi
+# Work funded by US NAS and ONRG (IMPRESS-U).
 # SPDX-License-Identifier: ISC
 #
 cmake_minimum_required(VERSION 3.25)
