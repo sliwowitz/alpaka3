@@ -1,60 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Portions adapted from UoB-HPC/miniBUDE (Apache-2.0)
+// Portions adapted from UoB-HPC/miniBUDE (Apache-2.0) serial backend.
 // Author: Ivan Andriievskyi
 // Work funded by US NAS and ONRG (IMPRESS-U).
 
 #pragma once
+#include "minibude.hpp"
+
 #include <cmath>
 #include <cstdint>
-#include <limits>
-#include <vector>
 
-// ===== Deck types (as in miniBUDE) ==========================================
-#pragma pack(push, 1)
-
-struct DeckAtom
-{
-    float x, y, z;
-    std::int32_t type;
-};
-
-struct FFParams
-{
-    std::int32_t hbtype;
-    float radius;
-    float hphb;
-    float elsc;
-};
-
-#pragma pack(pop)
-
-// ===== Constants (match upstream miniBUDE) ==================================
-static constexpr float ZERO = 0.0f;
-static constexpr float QUARTER = 0.25f;
-static constexpr float HALF = 0.5f;
-static constexpr float ONE = 1.0f;
-static constexpr float TWO = 2.0f;
-static constexpr float FOUR = 4.0f;
-static constexpr float CNSTNT = 45.0f; // charge scaling
-
-// Energy evaluation parameters
-static constexpr int HBTYPE_F = 70; // formal
-static constexpr int HBTYPE_E = 69; // exceptional
-static constexpr float HARDNESS = 38.0f; // steric slope
-static constexpr float NPNPDIST = 5.5f; // nonpolar-nonpolar cutoff
-static constexpr float NPPDIST = 1.0f; // nonpolar-polar cutoff
-
-static constexpr float FloatMax = std::numeric_limits<float>::max();
-
-// ===== Per-pose scorer (serial) =============================================
-//
-// Input:
-//  - ligand/protein : arrays of DeckAtom
-//  - ff : forcefield table (indexed by .type)
-//  - (rx,ry,rz, tx,ty,tz) : 6-DOF pose (radians/meters or consistent units)
-//
-// Returns: energy for this pose (same model as miniBUDE serial).
-//
 inline float score_pose_minibude_serial(
     DeckAtom const* ligand,
     std::size_t natlig,
@@ -68,7 +22,6 @@ inline float score_pose_minibude_serial(
     float ty,
     float tz)
 {
-    //  3x4 transform from Euler angles + translation
     float const sx = std::sin(rx), cx = std::cos(rx);
     float const sy = std::sin(ry), cy = std::cos(ry);
     float const sz = std::sin(rz), cz = std::cos(rz);
@@ -91,7 +44,6 @@ inline float score_pose_minibude_serial(
 
     float etot = 0.0f;
 
-    // Loop over ligand atoms
     for(std::size_t il = 0; il < natlig; ++il)
     {
         DeckAtom const l_atom = ligand[il];
@@ -99,12 +51,10 @@ inline float score_pose_minibude_serial(
         bool const lhphb_ltz = (l_params.hphb < 0.f);
         bool const lhphb_gtz = (l_params.hphb > 0.f);
 
-        // Transform ligand atom
         float const lpos_x = T[0][3] + l_atom.x * T[0][0] + l_atom.y * T[0][1] + l_atom.z * T[0][2];
         float const lpos_y = T[1][3] + l_atom.x * T[1][0] + l_atom.y * T[1][1] + l_atom.z * T[1][2];
         float const lpos_z = T[2][3] + l_atom.x * T[2][0] + l_atom.y * T[2][1] + l_atom.z * T[2][2];
 
-        // Loop over protein atoms
         for(std::size_t ip = 0; ip < natpro; ++ip)
         {
             DeckAtom const p_atom = protein[ip];
@@ -131,7 +81,6 @@ inline float score_pose_minibude_serial(
             float const chrg_init = l_params.elsc * p_params.elsc;
             float const dslv_init = p_hphb + l_hphb;
 
-            // Distance and interactions
             float const dx = lpos_x - p_atom.x;
             float const dy = lpos_y - p_atom.y;
             float const dz = lpos_z - p_atom.z;
@@ -140,16 +89,13 @@ inline float score_pose_minibude_serial(
             float const distbb = distij - radij;
             bool const zone1 = (distbb < ZERO);
 
-            // Steric (hardness) — active only when spheres overlap
             etot += (ONE - (distij * r_radij)) * (zone1 ? TWO * HARDNESS : 0.f);
 
-            // Formal/dipole charge
             float chrg_e = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
             if(type_E)
                 chrg_e = -std::fabs(chrg_e);
             etot += chrg_e * CNSTNT;
 
-            // Nonpolar–polar terms (desolvation / hydrophobic)
             float const coeff = (ONE - (distbb * r_distdslv));
             float dslv_e = dslv_init * (((distbb < distdslv) && phphb_nz) ? ONE : 0.f);
             dslv_e *= (zone1 ? ONE : coeff);
