@@ -124,26 +124,12 @@ int main(int argc, char** argv)
 
     std::size_t const N = dof[0].size();
 
-    // Warmup
+    // Warmup: run once via Alpaka
     float volatile sink = 0.0f;
-    for(int w = 0; w < 1; ++w)
     {
-        for(std::size_t i = 0; i < N; ++i)
-        {
-            float e = score_pose_minibude_serial(
-                ligand.data(),
-                ligand.size(),
-                protein.data(),
-                protein.size(),
-                ff.data(),
-                dof[0][i],
-                dof[1][i],
-                dof[2][i],
-                dof[3][i],
-                dof[4][i],
-                dof[5][i]);
-            sink = sink + e;
-        }
+        auto tmpE = compute_energies_alpaka(ligand, protein, ff, dof);
+        for(auto v : tmpE)
+            sink += v;
     }
 
     // Timed runs
@@ -155,26 +141,15 @@ int main(int argc, char** argv)
         double t = time_ms(
             [&]
             {
+                auto tmpE = compute_energies_alpaka(ligand, protein, ff, dof);
                 float Eacc = 0.0f;
-                for(std::size_t i = 0; i < N; ++i)
+                for(std::size_t i = 0; i < tmpE.size(); ++i)
                 {
-                    float e = score_pose_minibude_serial(
-                        ligand.data(),
-                        ligand.size(),
-                        protein.data(),
-                        protein.size(),
-                        ff.data(),
-                        dof[0][i],
-                        dof[1][i],
-                        dof[2][i],
-                        dof[3][i],
-                        dof[4][i],
-                        dof[5][i]);
-                    Eacc += e;
+                    Eacc += tmpE[i];
                     if(r == args.runs - 1)
-                        energies[i] = e;
+                        energies[i] = tmpE[i];
                 }
-                sink = sink + Eacc;
+                sink += Eacc;
             });
         times_ms.push_back(t);
     }
