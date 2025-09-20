@@ -188,16 +188,17 @@ static double measureAlloc(TQueue& queue, std::size_t runs, AllocFn&& fn, uint8_
 {
     using clock = std::chrono::high_resolution_clock;
     auto t0 = clock::now();
-    uint8_t retval = uint8_t{1}; // to ensure buffer is used
+    //uint8_t retval = uint8_t{1}; // to ensure buffer is used
     for(std::size_t i = 0; i < runs; ++i)
     {
         auto buf = fn(); // 1) allocate buffer
         alpaka::onHost::memset(queue, buf, uint8_t{0}); // 2) touch buffer: zero-init
-        retval = static_cast<uint8_t>(buf[0]); // 3) read first byte to enforce use
+        //retval = static_cast<uint8_t>(buf[0]); // 3) read first byte to enforce use
         alpaka::onHost::wait(queue); // 4) sync memset + alloc
     }
     auto t1 = clock::now();
-    returnValue = retval; // return the last value read from the buffer
+    //returnValue = retval; // return the last value read from the buffer
+    returnValue = 0;
     return std::chrono::duration<double>(t1 - t0).count(); // seconds total
 }
 
@@ -306,8 +307,8 @@ void testAlloc(DeviceSpec const& spec, Exec const& exec)
     onHost::Queue queue = dev.makeQueue();
 
     AllocResults results;
-    results.addKernel("HostAlloc", allocBytesMain * 1.0e-6);
-    results.addKernel("DeviceAlloc", allocBytesMain * 1.0e-6);
+    results.addKernel("HostAlloc", allocBytesMain / 1024 / 1024);
+    results.addKernel("DeviceAlloc", allocBytesMain / 1024 / 1024);
 
     uint8_t resultByte = uint8_t{1}; // to ensure buffer is used
 
