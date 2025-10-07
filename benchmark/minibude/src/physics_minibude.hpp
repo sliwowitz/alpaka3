@@ -11,8 +11,15 @@
 #include <alpaka/onHost/executeForEach.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 #include <vector>
+
+namespace onHost = alpaka::onHost;
+using alpaka::Vec;
 
 // ===== Alpaka kernel and host wrapper to compute energies for all poses =====
 
@@ -131,123 +138,211 @@ struct ScorePosesKernel1D
     }
 };
 
-inline std::vector<float> compute_energies_alpaka(
-    std::vector<DeckAtom> const& ligand,
-    std::vector<DeckAtom> const& protein,
-    std::vector<FFParams> const& ff,
-    std::array<std::vector<float>, 6> const& dof)
+template<typename TBackend>
+struct MiniBudeContext
 {
-    using namespace alpaka;
-    auto const N = static_cast<std::uint32_t>(dof[0].size());
-    auto const natlig = static_cast<std::uint32_t>(ligand.size());
-    auto const natpro = static_cast<std::uint32_t>(protein.size());
+    using Backend = TBackend;
+    using Clock = std::chrono::steady_clock;
+    using Vec1U = Vec<uint32_t, 1u>;
+    using HostDeckBuffer = std::decay_t<decltype(onHost::allocHost<DeckAtom>(Vec1U{1u}))>;
+    using HostFFBuffer = std::decay_t<decltype(onHost::allocHost<FFParams>(Vec1U{1u}))>;
+    using HostFloatBuffer = std::decay_t<decltype(onHost::allocHost<float>(Vec1U{1u}))>;
+    using DeviceSpec = std::decay_t<decltype(std::declval<Backend const&>()[alpaka::object::deviceSpec])>;
+    using ExecType = std::decay_t<decltype(std::declval<Backend const&>()[alpaka::object::exec])>;
+    using DeviceHandle
+        = std::decay_t<decltype(onHost::makeDeviceSelector(std::declval<DeviceSpec>()).makeDevice(0))>;
+    using QueueHandle = std::decay_t<decltype(std::declval<DeviceHandle>().makeQueue())>;
+    using ThreadSpecType = std::decay_t<decltype(onHost::ThreadSpec{Vec1U{1u}, Vec1U{1u}})>;
+    using DeviceDeckBuffer = std::decay_t<
+        decltype(onHost::allocLike(std::declval<DeviceHandle const&>(), std::declval<HostDeckBuffer const&>()))>;
+    using DeviceFFBuffer = std::decay_t<
+        decltype(onHost::allocLike(std::declval<DeviceHandle const&>(), std::declval<HostFFBuffer const&>()))>;
+    using DeviceFloatBuffer = std::decay_t<
+        decltype(onHost::allocLike(std::declval<DeviceHandle const&>(), std::declval<HostFloatBuffer const&>()))>;
 
-    std::vector<float> energies(N, 0.0f);
+    struct RunTimings
+    {
+        double kernel_ms;
+        double d2h_ms;
+    };
 
-    bool executed = false;
-    (void) onHost::executeForEachIfHasDevice(
-        [&](auto const& backend)
+    Backend backend;
+    DeviceHandle device;
+    QueueHandle queue;
+    ExecType exec;
+    std::uint32_t nposes;
+    std::uint32_t natlig;
+    std::uint32_t natpro;
+    std::uint32_t ffCount;
+    ThreadSpecType threadSpec;
+
+    HostDeckBuffer ligand_h;
+    HostDeckBuffer protein_h;
+    HostFFBuffer ff_h;
+    HostFloatBuffer rx_h;
+    HostFloatBuffer ry_h;
+    HostFloatBuffer rz_h;
+    HostFloatBuffer tx_h;
+    HostFloatBuffer ty_h;
+    HostFloatBuffer tz_h;
+    HostFloatBuffer out_h;
+
+    DeviceDeckBuffer ligand_d;
+    DeviceDeckBuffer protein_d;
+    DeviceFFBuffer ff_d;
+    DeviceFloatBuffer rx_d;
+    DeviceFloatBuffer ry_d;
+    DeviceFloatBuffer rz_d;
+    DeviceFloatBuffer tx_d;
+    DeviceFloatBuffer ty_d;
+    DeviceFloatBuffer tz_d;
+    DeviceFloatBuffer out_d;
+
+    MiniBudeContext(
+        Backend const& backendIn,
+        std::vector<DeckAtom> const& ligand,
+        std::vector<DeckAtom> const& protein,
+        std::vector<FFParams> const& ff,
+        std::array<std::vector<float>, 6> const& dof)
+        : backend(backendIn)
+        , device(makeDevice(backendIn))
+        , queue(device.makeQueue())
+        , exec(backend[alpaka::object::exec])
+        , nposes(static_cast<std::uint32_t>(dof[0].size()))
+        , natlig(static_cast<std::uint32_t>(ligand.size()))
+        , natpro(static_cast<std::uint32_t>(protein.size()))
+        , ffCount(static_cast<std::uint32_t>(ff.size()))
+        , ligand_h(onHost::allocHost<DeckAtom>(Vec1U{natlig}))
+        , protein_h(onHost::allocHost<DeckAtom>(Vec1U{natpro}))
+        , ff_h(onHost::allocHost<FFParams>(Vec1U{ffCount}))
+        , rx_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , ry_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , rz_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , tx_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , ty_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , tz_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , out_h(onHost::allocHost<float>(Vec1U{nposes}))
+        , ligand_d(onHost::allocLike(device, ligand_h))
+        , protein_d(onHost::allocLike(device, protein_h))
+        , ff_d(onHost::allocLike(device, ff_h))
+        , rx_d(onHost::allocLike(device, rx_h))
+        , ry_d(onHost::allocLike(device, ry_h))
+        , rz_d(onHost::allocLike(device, rz_h))
+        , tx_d(onHost::allocLike(device, tx_h))
+        , ty_d(onHost::allocLike(device, ty_h))
+        , tz_d(onHost::allocLike(device, tz_h))
+        , out_d(onHost::allocLike(device, out_h))
+        , threadSpec(makeThreadSpec())
+    {
+    }
+
+    double init(
+        std::vector<DeckAtom> const& ligand,
+        std::vector<DeckAtom> const& protein,
+        std::vector<FFParams> const& ff,
+        std::array<std::vector<float>, 6> const& dof)
+    {
+        for(std::uint32_t i = 0; i < this->natlig; ++i)
+            this->ligand_h[i] = ligand[i];
+        for(std::uint32_t i = 0; i < this->natpro; ++i)
+            this->protein_h[i] = protein[i];
+        for(std::uint32_t i = 0; i < this->ffCount; ++i)
+            this->ff_h[i] = ff[i];
+        for(std::uint32_t i = 0; i < this->nposes; ++i)
         {
-            if(executed)
-                return;
+            this->rx_h[i] = dof[0][i];
+            this->ry_h[i] = dof[1][i];
+            this->rz_h[i] = dof[2][i];
+            this->tx_h[i] = dof[3][i];
+            this->ty_h[i] = dof[4][i];
+            this->tz_h[i] = dof[5][i];
+            this->out_h[i] = 0.0f;
+        }
 
-            auto devSelector = onHost::makeDeviceSelector(backend[object::deviceSpec]);
-            if(!devSelector.isAvailable())
-                return;
+        auto const start = Clock::now();
+        onHost::memcpy(this->queue, this->ligand_d, this->ligand_h);
+        onHost::memcpy(this->queue, this->protein_d, this->protein_h);
+        onHost::memcpy(this->queue, this->ff_d, this->ff_h);
+        onHost::memcpy(this->queue, this->rx_d, this->rx_h);
+        onHost::memcpy(this->queue, this->ry_d, this->ry_h);
+        onHost::memcpy(this->queue, this->rz_d, this->rz_h);
+        onHost::memcpy(this->queue, this->tx_d, this->tx_h);
+        onHost::memcpy(this->queue, this->ty_d, this->ty_h);
+        onHost::memcpy(this->queue, this->tz_d, this->tz_h);
+        onHost::memset(this->queue, this->out_d, 0x00);
+        onHost::wait(this->queue);
+        auto const end = Clock::now();
 
-            onHost::Device dev = devSelector.makeDevice(0);
-            onHost::Queue queue = dev.makeQueue();
+        std::chrono::duration<double, std::milli> const dt = end - start;
+        return dt.count();
+    }
 
-            // Host-pinned views and device mirrors
-            auto ligand_h = onHost::allocHost<DeckAtom>(Vec<uint32_t, 1u>{natlig});
-            auto protein_h = onHost::allocHost<DeckAtom>(Vec<uint32_t, 1u>{natpro});
-            auto ff_h = onHost::allocHost<FFParams>(Vec<uint32_t, 1u>{static_cast<std::uint32_t>(ff.size())});
-            auto rx_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto ry_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto rz_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto tx_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto ty_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto tz_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
-            auto out_h = onHost::allocHost<float>(Vec<uint32_t, 1u>{N});
+    RunTimings run_once()
+    {
+        onHost::wait(this->queue);
 
-            // Copy from std::vector to host views
-            for(std::uint32_t i = 0; i < natlig; ++i)
-                ligand_h[i] = ligand[i];
-            for(std::uint32_t i = 0; i < natpro; ++i)
-                protein_h[i] = protein[i];
-            for(std::uint32_t i = 0; i < static_cast<std::uint32_t>(ff.size()); ++i)
-                ff_h[i] = ff[i];
-            for(std::uint32_t i = 0; i < N; ++i)
-            {
-                rx_h[i] = dof[0][i];
-                ry_h[i] = dof[1][i];
-                rz_h[i] = dof[2][i];
-                tx_h[i] = dof[3][i];
-                ty_h[i] = dof[4][i];
-                tz_h[i] = dof[5][i];
-                out_h[i] = 0.0f;
-            }
+        auto const kernelStart = Clock::now();
+        this->queue.enqueue(
+            this->exec,
+            this->threadSpec,
+            ScorePosesKernel1D{},
+            this->ligand_d,
+            this->protein_d,
+            this->ff_d,
+            this->rx_d,
+            this->ry_d,
+            this->rz_d,
+            this->tx_d,
+            this->ty_d,
+            this->tz_d,
+            this->out_d,
+            this->natlig,
+            this->natpro,
+            this->nposes);
+        onHost::wait(this->queue);
+        auto const kernelEnd = Clock::now();
 
-            auto ligand_d = onHost::allocLike(dev, ligand_h);
-            auto protein_d = onHost::allocLike(dev, protein_h);
-            auto ff_d = onHost::allocLike(dev, ff_h);
-            auto rx_d = onHost::allocLike(dev, rx_h);
-            auto ry_d = onHost::allocLike(dev, ry_h);
-            auto rz_d = onHost::allocLike(dev, rz_h);
-            auto tx_d = onHost::allocLike(dev, tx_h);
-            auto ty_d = onHost::allocLike(dev, ty_h);
-            auto tz_d = onHost::allocLike(dev, tz_h);
-            auto out_d = onHost::allocLike(dev, out_h);
+        auto const d2hStart = Clock::now();
+        onHost::memcpy(this->queue, this->out_h, this->out_d);
+        onHost::wait(this->queue);
+        auto const d2hEnd = Clock::now();
 
-            onHost::memcpy(queue, ligand_d, ligand_h);
-            onHost::memcpy(queue, protein_d, protein_h);
-            onHost::memcpy(queue, ff_d, ff_h);
-            onHost::memcpy(queue, rx_d, rx_h);
-            onHost::memcpy(queue, ry_d, ry_h);
-            onHost::memcpy(queue, rz_d, rz_h);
-            onHost::memcpy(queue, tx_d, tx_h);
-            onHost::memcpy(queue, ty_d, ty_h);
-            onHost::memcpy(queue, tz_d, tz_h);
-            onHost::memset(queue, out_d, 0x00);
+        return RunTimings{
+            std::chrono::duration<double, std::milli>(kernelEnd - kernelStart).count(),
+            std::chrono::duration<double, std::milli>(d2hEnd - d2hStart).count()};
+    }
 
-            // Thread spec: choose a sensible 1D configuration
-            auto computeExec = backend[object::exec];
-            std::uint32_t const threadsPerBlock = 256u;
-            auto threadSpec = onHost::ThreadSpec{(N + threadsPerBlock - 1u) / threadsPerBlock, threadsPerBlock};
-            if constexpr(alpaka::isSeqExecutor(ALPAKA_TYPEOF(computeExec){}))
-            {
-                // Force single thread per block for seq executors
-                threadSpec.m_numThreads = decltype(threadSpec.m_numThreads){1u};
-                threadSpec.m_numBlocks = decltype(threadSpec.m_numBlocks){N};
-            }
+    void copy_energies(std::vector<float>& dest) const
+    {
+        dest.resize(this->nposes);
+        for(std::uint32_t i = 0; i < this->nposes; ++i)
+            dest[i] = this->out_h[i];
+    }
 
-            queue.enqueue(
-                computeExec,
-                threadSpec,
-                ScorePosesKernel1D{},
-                ligand_d,
-                protein_d,
-                ff_d,
-                rx_d,
-                ry_d,
-                rz_d,
-                tx_d,
-                ty_d,
-                tz_d,
-                out_d,
-                natlig,
-                natpro,
-                N);
+    float accumulate_output() const
+    {
+        float sum = 0.0f;
+        for(std::uint32_t i = 0; i < this->nposes; ++i)
+            sum += this->out_h[i];
+        return sum;
+    }
 
-            onHost::memcpy(queue, out_h, out_d);
-            onHost::wait(queue);
+private:
+    static DeviceHandle makeDevice(Backend const& backend)
+    {
+        auto selector = onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+        return selector.makeDevice(0);
+    }
 
-            for(std::uint32_t i = 0; i < N; ++i)
-                energies[i] = out_h[i];
-
-            executed = true;
-        },
-        onHost::allBackends(onHost::enabledApis, onHost::example::enabledExecutors));
-
-    return energies;
-}
+    ThreadSpecType makeThreadSpec() const
+    {
+        std::uint32_t const threadsPerBlock = 256u;
+        onHost::ThreadSpec spec{(nposes + threadsPerBlock - 1u) / threadsPerBlock, threadsPerBlock};
+        if constexpr(alpaka::isSeqExecutor(std::decay_t<decltype(exec)>{}))
+        {
+            spec.m_numThreads = decltype(spec.m_numThreads){1u};
+            spec.m_numBlocks = decltype(spec.m_numBlocks){nposes};
+        }
+        return spec;
+    }
+};

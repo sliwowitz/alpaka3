@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+namespace onHost = alpaka::onHost;
+
 struct Args
 {
     std::string deckDir;
@@ -89,6 +91,31 @@ static Args parseArgs(int argc, char** argv)
     return a;
 }
 
+struct TimingStats
+{
+    double min;
+    double avg;
+    double max;
+};
+
+static TimingStats computeStats(std::vector<double> const& values)
+{
+    if(values.empty())
+        return TimingStats{0.0, 0.0, 0.0};
+
+    double mn = std::numeric_limits<double>::infinity();
+    double mx = 0.0;
+    double sum = 0.0;
+    for(double v : values)
+    {
+        mn = std::min(mn, v);
+        mx = std::max(mx, v);
+        sum += v;
+    }
+    double avg = sum / static_cast<double>(values.size());
+    return TimingStats{mn, avg, mx};
+}
+
 int main(int argc, char** argv)
 {
     auto const args = parseArgs(argc, argv);
@@ -124,55 +151,68 @@ int main(int argc, char** argv)
 
     std::size_t const N = dof[0].size();
 
-    // Warmup: run once via Alpaka
+    // Context-assisted execution
     float volatile sink = 0.0f;
-    {
-        auto tmpE = compute_energies_alpaka(ligand, protein, ff, dof);
-        for(auto v : tmpE)
-            sink += v;
-    }
-
-    // Timed runs
-    std::vector<double> times_ms;
-    times_ms.reserve(args.runs);
     std::vector<float> energies(N, 0.0f);
-    for(int r = 0; r < args.runs; ++r)
-    {
-        double t = time_ms(
-            [&]
-            {
-                auto tmpE = compute_energies_alpaka(ligand, protein, ff, dof);
-                float Eacc = 0.0f;
-                for(std::size_t i = 0; i < tmpE.size(); ++i)
-                {
-                    Eacc += tmpE[i];
-                    if(r == args.runs - 1)
-                        energies[i] = tmpE[i];
-                }
-                sink += Eacc;
-            });
-        times_ms.push_back(t);
-    }
+    std::vector<double> kernel_ms;
+    std::vector<double> context_ms;
+    double init_context_ms = 0.0;
+    bool executed = false;
 
-    // Timing summary
-    double mn = std::numeric_limits<double>::infinity(), mx = 0.0, sum = 0.0;
-    for(double t : times_ms)
-    {
-        mn = std::min(mn, t);
-        mx = std::max(mx, t);
-        sum += t;
-    }
-    double avg = sum / times_ms.size();
+    (void) onHost::executeForEachIfHasDevice(
+        [&](auto const& backend)
+        {
+            if(executed)
+                return;
+
+            MiniBudeContext<decltype(backend)> context(backend, ligand, protein, ff, dof);
+            init_context_ms = context.init(ligand, protein, ff, dof);
+
+            // Warmup run (excluded from stats, ensures residency)
+            (void) context.run_once();
+            sink += context.accumulate_output();
+
+            kernel_ms.resize(static_cast<std::size_t>(args.runs));
+            context_ms.resize(static_cast<std::size_t>(args.runs));
+
+            for(int r = 0; r < args.runs; ++r)
+            {
+                auto const timings = context.run_once();
+                std::size_t const idx = static_cast<std::size_t>(r);
+                kernel_ms[idx] = timings.kernel_ms;
+                context_ms[idx] = timings.d2h_ms;
+                sink += context.accumulate_output();
+            }
+
+            context.copy_energies(energies);
+            executed = true;
+        },
+        onHost::allBackends(onHost::enabledApis, onHost::example::enabledExecutors));
+
+    if(!executed)
+        throw std::runtime_error("No suitable Alpaka backend found for miniBUDE.");
+
+    auto const kernelStats = computeStats(kernel_ms);
+    auto const contextStats = computeStats(context_ms);
 
     if(args.csv)
     {
-        std::cout << std::fixed << std::setprecision(3) << "min_ms,avg_ms,max_ms\n"
-                  << mn << "," << avg << "," << mx << "\n";
+        std::cout << std::fixed << std::setprecision(3);
+        std::cout << "metric,min_ms,avg_ms,max_ms\n";
+        std::cout << "kernel," << kernelStats.min << "," << kernelStats.avg << "," << kernelStats.max << "\n";
+        std::cout << "context_d2h," << contextStats.min << "," << contextStats.avg << "," << contextStats.max
+                  << "\n";
+        std::cout << "context_init," << init_context_ms << "," << init_context_ms << "," << init_context_ms
+                  << "\n";
     }
     else
     {
-        std::cout << std::fixed << std::setprecision(3) << "time_ms: min/avg/max = " << mn << " / " << avg << " / "
-                  << mx << "\n";
+        std::cout << std::fixed << std::setprecision(3)
+                  << "kernel_ms: min/avg/max = " << kernelStats.min << " / " << kernelStats.avg << " / "
+                  << kernelStats.max << "\n"
+                  << "context_ms (d2h): min/avg/max = " << contextStats.min << " / " << contextStats.avg << " / "
+                  << contextStats.max << "\n"
+                  << "context_init_ms: " << init_context_ms << "\n";
     }
 
     if(!args.dump_path.empty())

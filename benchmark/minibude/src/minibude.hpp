@@ -51,17 +51,6 @@ inline constexpr float NPPDIST = 1.0f;
 
 inline constexpr float FloatMax = std::numeric_limits<float>::max();
 
-// ===== Timing =====
-template<class F>
-inline double time_ms(F&& f)
-{
-    using clock = std::chrono::steady_clock;
-    auto t0 = clock::now();
-    f();
-    std::chrono::duration<double, std::milli> dt = clock::now() - t0;
-    return dt.count();
-}
-
 // ===== Deck I/O =====
 template<class T>
 inline std::vector<T> readBinaryVec(std::string const& path)
