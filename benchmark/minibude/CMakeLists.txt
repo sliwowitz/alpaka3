@@ -1,5 +1,5 @@
 #
-# Copyright 2025 Ivan Andriievskyi
+# Copyright 2025 Ivan Andriievskyi, Jiří Vyskočil
 # SPDX-License-Identifier: ISC
 #
 cmake_minimum_required(VERSION 3.25)
@@ -30,9 +30,10 @@ set(_TARGET_NAME "minibude")
 
 file(GLOB_RECURSE _FILES_SOURCE "./src/*.cpp")
 
-alpaka_add_executable(${_TARGET_NAME} ${_FILES_SOURCE})
+add_executable(${_TARGET_NAME} ${_FILES_SOURCE})
 target_include_directories(${_TARGET_NAME} PRIVATE "src")
 target_link_libraries(${_TARGET_NAME} PRIVATE alpaka::alpaka)
+alpaka_finalize(${_TARGET_NAME})
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER benchmarks/minibude)
 
 target_compile_features(${_TARGET_NAME} PRIVATE cxx_std_20)

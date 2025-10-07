@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MPL-2.0
 // Portions adapted conceptually from UoB-HPC/miniBUDE (Apache-2.0).
-// Author: Ivan Andriievskyi
+// Author: Ivan Andriievskyi, Jiří Vyskočil
 // Work funded by US NAS and ONRG (IMPRESS-U).
 
 #include "minibude.hpp"

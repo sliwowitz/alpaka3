@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MPL-2.0
 // Portions adapted from UoB-HPC/miniBUDE (Apache-2.0) serial backend.
 // Author: Ivan Andriievskyi
 // Work funded by US NAS and ONRG (IMPRESS-U).
@@ -7,8 +7,8 @@
 #include "minibude.hpp"
 
 #include <alpaka/alpaka.hpp>
-#include <alpaka/example/executeForEach.hpp>
-#include <alpaka/example/executors.hpp>
+#include <alpaka/onHost/example/executors.hpp>
+#include <alpaka/onHost/executeForEach.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -145,7 +145,7 @@ inline std::vector<float> compute_energies_alpaka(
     std::vector<float> energies(N, 0.0f);
 
     bool executed = false;
-    (void) alpaka::executeForEachIfHasDevice(
+    (void) onHost::executeForEachIfHasDevice(
         [&](auto const& backend)
         {
             if(executed)
@@ -188,16 +188,16 @@ inline std::vector<float> compute_energies_alpaka(
                 out_h[i] = 0.0f;
             }
 
-            auto ligand_d = onHost::allocMirror(dev, ligand_h);
-            auto protein_d = onHost::allocMirror(dev, protein_h);
-            auto ff_d = onHost::allocMirror(dev, ff_h);
-            auto rx_d = onHost::allocMirror(dev, rx_h);
-            auto ry_d = onHost::allocMirror(dev, ry_h);
-            auto rz_d = onHost::allocMirror(dev, rz_h);
-            auto tx_d = onHost::allocMirror(dev, tx_h);
-            auto ty_d = onHost::allocMirror(dev, ty_h);
-            auto tz_d = onHost::allocMirror(dev, tz_h);
-            auto out_d = onHost::allocMirror(dev, out_h);
+            auto ligand_d = onHost::allocLike(dev, ligand_h);
+            auto protein_d = onHost::allocLike(dev, protein_h);
+            auto ff_d = onHost::allocLike(dev, ff_h);
+            auto rx_d = onHost::allocLike(dev, rx_h);
+            auto ry_d = onHost::allocLike(dev, ry_h);
+            auto rz_d = onHost::allocLike(dev, rz_h);
+            auto tx_d = onHost::allocLike(dev, tx_h);
+            auto ty_d = onHost::allocLike(dev, ty_h);
+            auto tz_d = onHost::allocLike(dev, tz_h);
+            auto out_d = onHost::allocLike(dev, out_h);
 
             onHost::memcpy(queue, ligand_d, ligand_h);
             onHost::memcpy(queue, protein_d, protein_h);
@@ -247,7 +247,7 @@ inline std::vector<float> compute_energies_alpaka(
 
             executed = true;
         },
-        onHost::allBackends(onHost::enabledApis));
+        onHost::allBackends(onHost::enabledApis, onHost::example::enabledExecutors));
 
     return energies;
 }
