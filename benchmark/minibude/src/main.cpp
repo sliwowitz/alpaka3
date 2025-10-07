@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <alpaka/onHost/demangledName.hpp>
+
 namespace onHost = alpaka::onHost;
 
 struct Args
@@ -136,115 +138,129 @@ int main(int argc, char** argv)
     if(args.verify)
         refE = readRefEnergiesTxt(D + "/ref_energies.out");
 
-    std::cout << "miniBUDE deck mode\n"
-              << "  ligand atoms : " << ligand.size() << "\n"
-              << "  protein atoms: " << protein.size() << "\n"
-              << "  ff params    : " << ff.size() << "\n"
-              << "  poses        : " << dof[0].size() << "\n"
-              << (args.verify ? "  ref energies : " : "") << (args.verify ? std::to_string(refE.size()) : "")
-              << (args.verify ? "\n" : "");
-    if(!dof[0].empty())
-    {
-        std::cout << "  pose[0] = { " << dof[0][0] << ", " << dof[1][0] << ", " << dof[2][0] << ", " << dof[3][0]
-                  << ", " << dof[4][0] << ", " << dof[5][0] << " }\n";
-    }
-
-    std::size_t const N = dof[0].size();
-
-    // Context-assisted execution
     float volatile sink = 0.0f;
-    std::vector<float> energies(N, 0.0f);
-    std::vector<double> kernel_ms;
-    std::vector<double> context_ms;
-    double init_context_ms = 0.0;
-    bool executed = false;
+    bool anyBackend = false;
+    bool firstSection = true;
 
+    auto const backends = onHost::allBackends(onHost::enabledApis, onHost::example::enabledExecutors);
     (void) onHost::executeForEachIfHasDevice(
         [&](auto const& backend)
         {
-            if(executed)
-                return;
+            anyBackend = true;
 
             MiniBudeContext<decltype(backend)> context(backend, ligand, protein, ff, dof);
-            init_context_ms = context.init(ligand, protein, ff, dof);
+            double const init_context_ms = context.init(ligand, protein, ff, dof);
 
-            // Warmup run (excluded from stats, ensures residency)
             (void) context.run_once();
             sink += context.accumulate_output();
 
-            kernel_ms.resize(static_cast<std::size_t>(args.runs));
-            context_ms.resize(static_cast<std::size_t>(args.runs));
+            std::vector<double> kernel_ms;
+            std::vector<double> context_ms;
+            kernel_ms.reserve(static_cast<std::size_t>(args.runs));
+            context_ms.reserve(static_cast<std::size_t>(args.runs));
 
             for(int r = 0; r < args.runs; ++r)
             {
                 auto const timings = context.run_once();
-                std::size_t const idx = static_cast<std::size_t>(r);
-                kernel_ms[idx] = timings.kernel_ms;
-                context_ms[idx] = timings.d2h_ms;
+                kernel_ms.push_back(timings.kernel_ms);
+                context_ms.push_back(timings.d2h_ms);
                 sink += context.accumulate_output();
             }
 
+            std::vector<float> energies;
             context.copy_energies(energies);
-            executed = true;
+
+            auto const kernelStats = computeStats(kernel_ms);
+            auto const contextStats = computeStats(context_ms);
+
+            auto const acceleratorName = alpaka::onHost::demangledName(context.exec);
+            auto const deviceName = context.device.getName();
+            auto const dataSummaryHuman = "poses=" + std::to_string(context.nposes) + ", ligand="
+                + std::to_string(context.natlig) + ", protein=" + std::to_string(context.natpro)
+                + ", ff=" + std::to_string(context.ffCount);
+            auto const dataSummaryCsv = "poses=" + std::to_string(context.nposes) + ";ligand="
+                + std::to_string(context.natlig) + ";protein=" + std::to_string(context.natpro)
+                + ";ff=" + std::to_string(context.ffCount);
+
+            if(args.csv)
+            {
+                if(!firstSection)
+                    std::cout << '\n';
+                std::cout << std::fixed << std::setprecision(3);
+                std::cout << "metric,min_ms,avg_ms,max_ms,accelerator,device,data,runs,context_init_ms\n";
+                auto printCsvRow = [&](std::string const& metric, TimingStats const& stats)
+                {
+                    std::cout << metric << ',' << stats.min << ',' << stats.avg << ',' << stats.max << ','
+                              << acceleratorName << ',' << deviceName << ',' << dataSummaryCsv << ',' << args.runs << ','
+                              << init_context_ms << '\n';
+                };
+                printCsvRow("kernel", kernelStats);
+                printCsvRow("context_d2h", contextStats);
+            }
+            else
+            {
+                if(!firstSection)
+                    std::cout << '\n';
+
+                std::cout << "Accelerator:" << acceleratorName << '\n';
+                std::cout << "Device:" << deviceName << '\n';
+                std::cout << "Data: " << dataSummaryHuman << '\n';
+                std::cout << "Runs:" << args.runs << '\n';
+
+                std::cout << std::fixed << std::setprecision(3);
+                std::cout << std::left << std::setw(12) << "Kernel"
+                          << std::right << std::setw(10) << "Min(ms)" << std::setw(10) << "Max(ms)"
+                          << std::setw(10) << "Avg(ms)" << std::setw(8) << "Note" << '\n';
+                std::cout << std::left << std::setw(12) << "Compute" << std::right << std::setw(10)
+                          << kernelStats.min << std::setw(10) << kernelStats.max << std::setw(10) << kernelStats.avg
+                          << std::setw(8) << "" << '\n';
+                std::cout << std::left << std::setw(12) << "D2H" << std::right << std::setw(10)
+                          << contextStats.min << std::setw(10) << contextStats.max << std::setw(10)
+                          << contextStats.avg << std::setw(8) << "context" << '\n';
+                std::cout << "context_init_ms: " << init_context_ms << '\n';
+                std::cout << std::defaultfloat;
+            }
+
+            if(!args.dump_path.empty())
+            {
+                std::ofstream out(args.dump_path, std::ios::out | std::ios::trunc);
+                for(float e : energies)
+                    out << std::setprecision(7) << e << '\n';
+                if(!args.csv)
+                {
+                    std::cout << (out ? "# energies dumped to " + args.dump_path + "\n"
+                                      : "# ERROR: failed to write " + args.dump_path + "\n");
+                }
+            }
+
+            if(args.verify)
+            {
+                if(refE.size() != energies.size())
+                {
+                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
+                              << energies.size() << ")\n";
+                }
+                auto const res = verifyEnergies(refE, energies, args.tol_pct, args.rows, args.csv);
+                if(args.csv)
+                {
+                    std::cout << "valid,max_diff_pct\n"
+                              << (res.valid ? "true" : "false") << ',' << std::setprecision(6) << res.max_diff_pct
+                              << "\n";
+                }
+                else
+                {
+                    std::cout << "verify: { valid: " << (res.valid ? "true" : "false")
+                              << ", max_diff_%: " << std::setprecision(6) << res.max_diff_pct
+                              << ", tol_%: " << std::setprecision(6) << args.tol_pct << " }\n";
+                }
+            }
+
+            firstSection = false;
         },
-        onHost::allBackends(onHost::enabledApis, onHost::example::enabledExecutors));
+        backends);
 
-    if(!executed)
+    if(!anyBackend)
         throw std::runtime_error("No suitable Alpaka backend found for miniBUDE.");
-
-    auto const kernelStats = computeStats(kernel_ms);
-    auto const contextStats = computeStats(context_ms);
-
-    if(args.csv)
-    {
-        std::cout << std::fixed << std::setprecision(3);
-        std::cout << "metric,min_ms,avg_ms,max_ms\n";
-        std::cout << "kernel," << kernelStats.min << "," << kernelStats.avg << "," << kernelStats.max << "\n";
-        std::cout << "context_d2h," << contextStats.min << "," << contextStats.avg << "," << contextStats.max
-                  << "\n";
-        std::cout << "context_init," << init_context_ms << "," << init_context_ms << "," << init_context_ms
-                  << "\n";
-    }
-    else
-    {
-        std::cout << std::fixed << std::setprecision(3)
-                  << "kernel_ms: min/avg/max = " << kernelStats.min << " / " << kernelStats.avg << " / "
-                  << kernelStats.max << "\n"
-                  << "context_ms (d2h): min/avg/max = " << contextStats.min << " / " << contextStats.avg << " / "
-                  << contextStats.max << "\n"
-                  << "context_init_ms: " << init_context_ms << "\n";
-    }
-
-    if(!args.dump_path.empty())
-    {
-        std::ofstream out(args.dump_path, std::ios::out | std::ios::trunc);
-        for(float e : energies)
-            out << std::setprecision(7) << e << "\n";
-        std::cout
-            << (out ? "# energies dumped to " + args.dump_path + "\n"
-                    : "# ERROR: failed to write " + args.dump_path + "\n");
-    }
-
-    if(args.verify)
-    {
-        if(refE.size() != energies.size())
-        {
-            std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count (" << energies.size()
-                      << ")\n";
-        }
-        auto res = verifyEnergies(refE, energies, args.tol_pct, args.rows, args.csv);
-        if(args.csv)
-        {
-            std::cout << "valid,max_diff_pct\n"
-                      << (res.valid ? "true" : "false") << "," << std::setprecision(6) << res.max_diff_pct << "\n";
-        }
-        else
-        {
-            std::cout << "verify: { valid: " << (res.valid ? "true" : "false")
-                      << ", max_diff_%: " << std::setprecision(6) << res.max_diff_pct << ", tol_%: " << args.tol_pct
-                      << " }\n";
-        }
-    }
 
     (void) sink;
     return 0;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Portions adapted from UoB-HPC/miniBUDE (Apache-2.0) serial backend.
-// Author: Ivan Andriievskyi
+// Author: Ivan Andriievskyi, Jiří Vyskočil
 // Work funded by US NAS and ONRG (IMPRESS-U).
 
 #pragma once
@@ -149,8 +149,7 @@ struct MiniBudeContext
     using HostFloatBuffer = std::decay_t<decltype(onHost::allocHost<float>(Vec1U{1u}))>;
     using DeviceSpec = std::decay_t<decltype(std::declval<Backend const&>()[alpaka::object::deviceSpec])>;
     using ExecType = std::decay_t<decltype(std::declval<Backend const&>()[alpaka::object::exec])>;
-    using DeviceHandle
-        = std::decay_t<decltype(onHost::makeDeviceSelector(std::declval<DeviceSpec>()).makeDevice(0))>;
+    using DeviceHandle = std::decay_t<decltype(onHost::makeDeviceSelector(std::declval<DeviceSpec>()).makeDevice(0))>;
     using QueueHandle = std::decay_t<decltype(std::declval<DeviceHandle>().makeQueue())>;
     using ThreadSpecType = std::decay_t<decltype(onHost::ThreadSpec{Vec1U{1u}, Vec1U{1u}})>;
     using DeviceDeckBuffer = std::decay_t<
