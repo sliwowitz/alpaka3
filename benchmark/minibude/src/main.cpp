@@ -8,16 +8,66 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <set>
+#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <alpaka/onHost/demangledName.hpp>
 
 namespace onHost = alpaka::onHost;
+
+static std::vector<std::uint32_t> parsePositiveListOrDefault(
+    std::string const& text,
+    std::uint32_t defaultValue,
+    std::string const& optionName)
+{
+    if(text.empty())
+        return {defaultValue};
+
+    std::vector<std::uint32_t> values;
+    std::stringstream ss(text);
+    std::string token;
+    while(std::getline(ss, token, ','))
+    {
+        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) { return std::isspace(ch); }), token.end());
+        if(token.empty())
+            continue;
+
+        std::size_t idx = 0;
+        unsigned long parsed = 0;
+        try
+        {
+            parsed = std::stoul(token, &idx, 10);
+        }
+        catch(std::exception const&)
+        {
+            throw std::runtime_error("Invalid value '" + token + "' for option --" + optionName + "");
+        }
+        if(idx != token.size())
+            throw std::runtime_error("Invalid value '" + token + "' for option --" + optionName + "");
+        if(parsed == 0ul)
+            throw std::runtime_error("Option --" + optionName + " requires positive integers");
+        if(parsed > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("Option --" + optionName + " value out of range");
+        values.push_back(static_cast<std::uint32_t>(parsed));
+    }
+
+    if(values.empty())
+        throw std::runtime_error("Option --" + optionName + " did not contain valid values");
+
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    return values;
+}
 
 struct Args
 {
@@ -28,6 +78,8 @@ struct Args
     std::size_t rows = 8;
     std::string dump_path;
     bool csv = false;
+    std::vector<std::uint32_t> ppwiValues;
+    std::vector<std::uint32_t> wgsizeValues;
 };
 
 static Args parseArgs(int argc, char** argv)
@@ -71,6 +123,22 @@ static Args parseArgs(int argc, char** argv)
             next_str(a.dump_path);
         else if(s == "--csv")
             a.csv = true;
+        else if(s == "--ppwi")
+        {
+            std::string raw;
+            next_str(raw);
+            if(raw.empty())
+                throw std::runtime_error("--ppwi requires a comma separated list");
+            a.ppwiValues = parsePositiveListOrDefault(raw, 1u, "ppwi");
+        }
+        else if(s == "--wgsize")
+        {
+            std::string raw;
+            next_str(raw);
+            if(raw.empty())
+                throw std::runtime_error("--wgsize requires a comma separated list");
+            a.wgsizeValues = parsePositiveListOrDefault(raw, 256u, "wgsize");
+        }
         else if(s == "-h" || s == "--help")
         {
             std::cout << "miniBUDE (CPU, deck mode)\n"
@@ -80,6 +148,8 @@ static Args parseArgs(int argc, char** argv)
                       << "  --tol-pct <pct>     tolerance percent (default " << a.tol_pct << ")\n"
                       << "  --rows <N>          number of mismatches to print (default " << a.rows << ")\n"
                       << "  --dump-energies P   write computed energies to file P\n"
+                      << "  --ppwi v1[,v2,...]  poses per work-item list (default 1)\n"
+                      << "  --wgsize v1[,v2,...] workgroup size list (default 256)\n"
                       << "  --csv               CSV summary\n";
             std::exit(0);
         }
@@ -90,6 +160,10 @@ static Args parseArgs(int argc, char** argv)
     }
     if(a.runs < 1)
         a.runs = 1;
+    if(a.ppwiValues.empty())
+        a.ppwiValues = {1u};
+    if(a.wgsizeValues.empty())
+        a.wgsizeValues = {256u};
     return a;
 }
 
@@ -148,30 +222,135 @@ int main(int argc, char** argv)
         {
             anyBackend = true;
 
+            for(auto v : args.ppwiValues)
+            {
+                if(!isSupportedPpwi(v))
+                    throw std::runtime_error("Unsupported PPWI value " + std::to_string(v));
+            }
+
             MiniBudeContext<decltype(backend)> context(backend, ligand, protein, ff, dof);
             double const init_context_ms = context.init(ligand, protein, ff, dof);
 
-            (void) context.run_once();
-            sink += context.accumulate_output();
-
-            std::vector<double> kernel_ms;
-            std::vector<double> context_ms;
-            kernel_ms.reserve(static_cast<std::size_t>(args.runs));
-            context_ms.reserve(static_cast<std::size_t>(args.runs));
-
-            for(int r = 0; r < args.runs; ++r)
+            struct ComboMetrics
             {
-                auto const timings = context.run_once();
-                kernel_ms.push_back(timings.kernel_ms);
-                context_ms.push_back(timings.d2h_ms);
-                sink += context.accumulate_output();
+                std::uint32_t ppwi = 0u;
+                std::uint32_t requestedWg = 0u;
+                std::uint32_t actualWg = 0u;
+                TimingStats kernelStats{};
+                TimingStats contextStats{};
+            };
+
+            std::vector<ComboMetrics> combos;
+            combos.reserve(args.ppwiValues.size() * args.wgsizeValues.size());
+
+            ComboMetrics bestMetrics{};
+            TimingStats bestKernelStats{};
+            TimingStats bestContextStats{};
+            bool hasBest = false;
+            std::vector<float> bestEnergies;
+
+            auto better = [](ComboMetrics const& lhs, TimingStats const& lhsKernel, ComboMetrics const& rhs, TimingStats const& rhsKernel) {
+                constexpr double eps = 1e-9;
+                auto cmp = [eps](double a, double b) {
+                    if(a < b - eps)
+                        return -1;
+                    if(a > b + eps)
+                        return 1;
+                    return 0;
+                };
+                int const cmpMin = cmp(lhsKernel.min, rhsKernel.min);
+                if(cmpMin < 0)
+                    return true;
+                if(cmpMin > 0)
+                    return false;
+                int const cmpAvg = cmp(lhsKernel.avg, rhsKernel.avg);
+                if(cmpAvg < 0)
+                    return true;
+                if(cmpAvg > 0)
+                    return false;
+                if(lhs.ppwi < rhs.ppwi)
+                    return true;
+                if(lhs.ppwi > rhs.ppwi)
+                    return false;
+                return lhs.actualWg < rhs.actualWg;
+            };
+
+            bool const autotune = (args.ppwiValues.size() * args.wgsizeValues.size() > 1);
+
+            for(std::uint32_t ppwi : args.ppwiValues)
+            {
+                for(std::uint32_t wgsize : args.wgsizeValues)
+                {
+                    ComboMetrics metrics{};
+                    metrics.ppwi = ppwi;
+                    metrics.requestedWg = wgsize;
+
+                    std::vector<double> kernel_ms;
+                    std::vector<double> context_ms;
+                    kernel_ms.reserve(static_cast<std::size_t>(args.runs));
+                    context_ms.reserve(static_cast<std::size_t>(args.runs));
+
+                    dispatchPpwi(ppwi, [&](auto ppwiConst) {
+                        constexpr std::uint32_t PPWI = ppwiConst;
+                        auto const specInfo = context.template makeThreadSpec<PPWI>(wgsize);
+                        metrics.actualWg = specInfo.actualWgsize;
+
+                        context.template run<PPWI>(specInfo.spec);
+                        sink += context.accumulate_output();
+
+                        for(int r = 0; r < args.runs; ++r)
+                        {
+                            auto const timings = context.template run<PPWI>(specInfo.spec);
+                            sink += context.accumulate_output();
+                            kernel_ms.push_back(timings.kernel_ms);
+                            context_ms.push_back(timings.d2h_ms);
+                        }
+                    });
+
+                    metrics.kernelStats = computeStats(kernel_ms);
+                    metrics.contextStats = computeStats(context_ms);
+                    combos.push_back(metrics);
+
+                    std::vector<float> energies;
+                    context.copy_energies(energies);
+
+                    if(!hasBest || better(metrics, metrics.kernelStats, bestMetrics, bestKernelStats))
+                    {
+                        hasBest = true;
+                        bestMetrics = metrics;
+                        bestKernelStats = metrics.kernelStats;
+                        bestContextStats = metrics.contextStats;
+                        bestEnergies = std::move(energies);
+                    }
+                }
             }
 
-            std::vector<float> energies;
-            context.copy_energies(energies);
+            if(!hasBest)
+                throw std::runtime_error("No valid configuration evaluated for miniBUDE");
 
-            auto const kernelStats = computeStats(kernel_ms);
-            auto const contextStats = computeStats(context_ms);
+            VerifyResult verifyRes{};
+            bool const doVerify = args.verify;
+            if(doVerify)
+            {
+                if(refE.size() != bestEnergies.size())
+                {
+                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
+                              << bestEnergies.size() << ")\n";
+                }
+                verifyRes = verifyEnergies(refE, bestEnergies, args.tol_pct, args.rows, args.csv);
+            }
+
+            if(!args.dump_path.empty())
+            {
+                std::ofstream out(args.dump_path, std::ios::out | std::ios::trunc);
+                for(float e : bestEnergies)
+                    out << std::setprecision(7) << e << '\n';
+                if(!args.csv)
+                {
+                    std::cout << (out ? "# energies dumped to " + args.dump_path + "\n"
+                                      : "# ERROR: failed to write " + args.dump_path + "\n");
+                }
+            }
 
             auto const acceleratorName = alpaka::onHost::demangledName(context.exec);
             auto const deviceName = context.device.getName();
@@ -187,15 +366,25 @@ int main(int argc, char** argv)
                 if(!firstSection)
                     std::cout << '\n';
                 std::cout << std::fixed << std::setprecision(3);
-                std::cout << "metric,min_ms,avg_ms,max_ms,accelerator,device,data,runs,context_init_ms\n";
-                auto printCsvRow = [&](std::string const& metric, TimingStats const& stats)
+                std::cout << "metric,min_ms,avg_ms,max_ms,accelerator,device,data,runs,ppwi,wgsize\n";
+                auto emitRow = [&](std::string const& metric, TimingStats const& stats, ComboMetrics const& metrics)
                 {
                     std::cout << metric << ',' << stats.min << ',' << stats.avg << ',' << stats.max << ','
-                              << acceleratorName << ',' << deviceName << ',' << dataSummaryCsv << ',' << args.runs << ','
-                              << init_context_ms << '\n';
+                              << acceleratorName << ',' << deviceName << ',' << dataSummaryCsv << ',' << args.runs
+                              << ',' << metrics.ppwi << ',' << metrics.actualWg << '\n';
                 };
-                printCsvRow("kernel", kernelStats);
-                printCsvRow("context_d2h", contextStats);
+                for(auto const& metrics : combos)
+                {
+                    emitRow("kernel", metrics.kernelStats, metrics);
+                    emitRow("context_d2h", metrics.contextStats, metrics);
+                }
+                emitRow("best", bestKernelStats, bestMetrics);
+                if(doVerify)
+                {
+                    std::cout << "verify," << (verifyRes.valid ? 1.0 : 0.0) << ',' << verifyRes.max_diff_pct << ','
+                              << args.tol_pct << ',' << acceleratorName << ',' << deviceName << ',' << dataSummaryCsv
+                              << ',' << args.runs << ',' << bestMetrics.ppwi << ',' << bestMetrics.actualWg << '\n';
+                }
             }
             else
             {
@@ -207,50 +396,44 @@ int main(int argc, char** argv)
                 std::cout << "Data: " << dataSummaryHuman << '\n';
                 std::cout << "Runs:" << args.runs << '\n';
 
-                std::cout << std::fixed << std::setprecision(3);
-                std::cout << std::left << std::setw(12) << "Kernel"
-                          << std::right << std::setw(10) << "Min(ms)" << std::setw(10) << "Max(ms)"
-                          << std::setw(10) << "Avg(ms)" << std::setw(8) << "Note" << '\n';
-                std::cout << std::left << std::setw(12) << "Compute" << std::right << std::setw(10)
-                          << kernelStats.min << std::setw(10) << kernelStats.max << std::setw(10) << kernelStats.avg
-                          << std::setw(8) << "" << '\n';
-                std::cout << std::left << std::setw(12) << "D2H" << std::right << std::setw(10)
-                          << contextStats.min << std::setw(10) << contextStats.max << std::setw(10)
-                          << contextStats.avg << std::setw(8) << "context" << '\n';
-                std::cout << "context_init_ms: " << init_context_ms << '\n';
-                std::cout << std::defaultfloat;
-            }
-
-            if(!args.dump_path.empty())
-            {
-                std::ofstream out(args.dump_path, std::ios::out | std::ios::trunc);
-                for(float e : energies)
-                    out << std::setprecision(7) << e << '\n';
-                if(!args.csv)
+                if(autotune)
                 {
-                    std::cout << (out ? "# energies dumped to " + args.dump_path + "\n"
-                                      : "# ERROR: failed to write " + args.dump_path + "\n");
-                }
-            }
-
-            if(args.verify)
-            {
-                if(refE.size() != energies.size())
-                {
-                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
-                              << energies.size() << ")\n";
-                }
-                auto const res = verifyEnergies(refE, energies, args.tol_pct, args.rows, args.csv);
-                if(args.csv)
-                {
-                    std::cout << "valid,max_diff_pct\n"
-                              << (res.valid ? "true" : "false") << ',' << std::setprecision(6) << res.max_diff_pct
-                              << "\n";
+                    std::cout << std::fixed << std::setprecision(3);
+                    std::cout << std::left << std::setw(16) << "Config" << std::right << std::setw(10) << "Min(ms)"
+                              << std::setw(10) << "Max(ms)" << std::setw(10) << "Avg(ms)" << '\n';
+                    for(auto const& metrics : combos)
+                    {
+                        std::ostringstream label;
+                        label << "ppwi=" << metrics.ppwi << ",wg=" << metrics.actualWg;
+                        std::cout << std::left << std::setw(16) << label.str() << std::right << std::setw(10)
+                                  << metrics.kernelStats.min << std::setw(10) << metrics.kernelStats.max
+                                  << std::setw(10) << metrics.kernelStats.avg << '\n';
+                    }
+                    std::cout << "Best: ppwi=" << bestMetrics.ppwi << ", wgsize=" << bestMetrics.actualWg
+                              << ", min_ms=" << bestKernelStats.min << ", avg_ms=" << bestKernelStats.avg
+                              << ", max_ms=" << bestKernelStats.max << "\n";
+                    std::cout << std::defaultfloat;
                 }
                 else
                 {
-                    std::cout << "verify: { valid: " << (res.valid ? "true" : "false")
-                              << ", max_diff_%: " << std::setprecision(6) << res.max_diff_pct
+                    std::cout << std::fixed << std::setprecision(3)
+                              << std::left << std::setw(12) << "Kernel"
+                              << std::right << std::setw(10) << "Min(ms)" << std::setw(10) << "Max(ms)"
+                              << std::setw(10) << "Avg(ms)" << std::setw(8) << "Note" << '\n';
+                    std::cout << std::left << std::setw(12) << "Compute" << std::right << std::setw(10)
+                              << bestKernelStats.min << std::setw(10) << bestKernelStats.max << std::setw(10)
+                              << bestKernelStats.avg << std::setw(8) << "" << '\n';
+                    std::cout << std::left << std::setw(12) << "D2H" << std::right << std::setw(10)
+                              << bestContextStats.min << std::setw(10) << bestContextStats.max << std::setw(10)
+                              << bestContextStats.avg << std::setw(8) << "context" << '\n';
+                    std::cout << "context_init_ms: " << init_context_ms << '\n';
+                    std::cout << std::defaultfloat;
+                }
+
+                if(doVerify)
+                {
+                    std::cout << "verify: { valid: " << (verifyRes.valid ? "true" : "false")
+                              << ", max_diff_%: " << std::setprecision(6) << verifyRes.max_diff_pct
                               << ", tol_%: " << std::setprecision(6) << args.tol_pct << " }\n";
                 }
             }

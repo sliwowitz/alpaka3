@@ -14,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@ using alpaka::Vec;
 
 // ===== Alpaka kernel and host wrapper to compute energies for all poses =====
 
+template<std::uint32_t T_PPWI>
 struct ScorePosesKernel1D
 {
     template<typename TAcc>
@@ -42,98 +44,110 @@ struct ScorePosesKernel1D
         std::uint32_t natpro,
         std::uint32_t nposes) const
     {
-        auto threadIdxInGrid = acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
-        auto numThreadsInGrid = acc.getExtentsOf(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
+        auto const threadIdxInGrid = acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
+        auto const numThreadsInGrid = acc.getExtentsOf(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
 
-        auto linearGridThreadIndex = alpaka::linearize(numThreadsInGrid, threadIdxInGrid);
-        auto linearGridSize = numThreadsInGrid.product();
+        auto const linearGridThreadIndex
+            = static_cast<std::uint32_t>(alpaka::linearize(numThreadsInGrid, threadIdxInGrid));
+        auto const linearGridSize = static_cast<std::uint32_t>(numThreadsInGrid.product());
+        std::uint64_t const workStride = static_cast<std::uint64_t>(linearGridSize) * static_cast<std::uint64_t>(T_PPWI);
 
-        for(std::uint32_t i = linearGridThreadIndex; i < nposes; i += linearGridSize)
+        for(std::uint64_t base = static_cast<std::uint64_t>(linearGridThreadIndex) * T_PPWI;
+            base < nposes;
+            base += workStride)
         {
-            float const sx = alpaka::math::sin(rx[i]), cx = alpaka::math::cos(rx[i]);
-            float const sy = alpaka::math::sin(ry[i]), cy = alpaka::math::cos(ry[i]);
-            float const sz = alpaka::math::sin(rz[i]), cz = alpaka::math::cos(rz[i]);
-
-            float T[3][4];
-            T[0][0] = cy * cz;
-            T[0][1] = sx * sy * cz - cx * sz;
-            T[0][2] = cx * sy * cz + sx * sz;
-            T[0][3] = tx[i];
-
-            T[1][0] = cy * sz;
-            T[1][1] = sx * sy * sz + cx * cz;
-            T[1][2] = cx * sy * sz - sx * cz;
-            T[1][3] = ty[i];
-
-            T[2][0] = -sy;
-            T[2][1] = sx * cy;
-            T[2][2] = cx * cy;
-            T[2][3] = tz[i];
-
-            float etot = 0.0f;
-
-            for(std::uint32_t il = 0; il < natlig; ++il)
+#pragma unroll
+            for(std::uint32_t j = 0u; j < T_PPWI; ++j)
             {
-                DeckAtom const l_atom = ligand[il];
-                FFParams const l_params = ff[static_cast<std::uint32_t>(l_atom.type)];
-                bool const lhphb_ltz = (l_params.hphb < 0.f);
-                bool const lhphb_gtz = (l_params.hphb > 0.f);
+                std::uint32_t const i = static_cast<std::uint32_t>(base + j);
+                if(i >= nposes)
+                    break;
 
-                float const lpos_x = T[0][3] + l_atom.x * T[0][0] + l_atom.y * T[0][1] + l_atom.z * T[0][2];
-                float const lpos_y = T[1][3] + l_atom.x * T[1][0] + l_atom.y * T[1][1] + l_atom.z * T[1][2];
-                float const lpos_z = T[2][3] + l_atom.x * T[2][0] + l_atom.y * T[2][1] + l_atom.z * T[2][2];
+                float const sx = alpaka::math::sin(rx[i]), cx = alpaka::math::cos(rx[i]);
+                float const sy = alpaka::math::sin(ry[i]), cy = alpaka::math::cos(ry[i]);
+                float const sz = alpaka::math::sin(rz[i]), cz = alpaka::math::cos(rz[i]);
 
-                for(std::uint32_t ip = 0; ip < natpro; ++ip)
+                float T[3][4];
+                T[0][0] = cy * cz;
+                T[0][1] = sx * sy * cz - cx * sz;
+                T[0][2] = cx * sy * cz + sx * sz;
+                T[0][3] = tx[i];
+
+                T[1][0] = cy * sz;
+                T[1][1] = sx * sy * sz + cx * cz;
+                T[1][2] = cx * sy * sz - sx * cz;
+                T[1][3] = ty[i];
+
+                T[2][0] = -sy;
+                T[2][1] = sx * cy;
+                T[2][2] = cx * cy;
+                T[2][3] = tz[i];
+
+                float etot = 0.0f;
+
+                for(std::uint32_t il = 0; il < natlig; ++il)
                 {
-                    DeckAtom const p_atom = protein[ip];
-                    FFParams const p_params = ff[static_cast<std::uint32_t>(p_atom.type)];
+                    DeckAtom const l_atom = ligand[il];
+                    FFParams const l_params = ff[static_cast<std::uint32_t>(l_atom.type)];
+                    bool const lhphb_ltz = (l_params.hphb < 0.f);
+                    bool const lhphb_gtz = (l_params.hphb > 0.f);
 
-                    float const radij = p_params.radius + l_params.radius;
-                    float const r_radij = ONE / radij;
+                    float const lpos_x = T[0][3] + l_atom.x * T[0][0] + l_atom.y * T[0][1] + l_atom.z * T[0][2];
+                    float const lpos_y = T[1][3] + l_atom.x * T[1][0] + l_atom.y * T[1][1] + l_atom.z * T[1][2];
+                    float const lpos_z = T[2][3] + l_atom.x * T[2][0] + l_atom.y * T[2][1] + l_atom.z * T[2][2];
 
-                    bool const bothF = (p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F);
-                    float const elcdst = bothF ? FOUR : TWO;
-                    float const elcdst1 = bothF ? QUARTER : HALF;
-                    bool const type_E = (p_params.hbtype == HBTYPE_E || l_params.hbtype == HBTYPE_E);
+                    for(std::uint32_t ip = 0; ip < natpro; ++ip)
+                    {
+                        DeckAtom const p_atom = protein[ip];
+                        FFParams const p_params = ff[static_cast<std::uint32_t>(p_atom.type)];
 
-                    bool const phphb_ltz = (p_params.hphb < 0.f);
-                    bool const phphb_gtz = (p_params.hphb > 0.f);
-                    bool const phphb_nz = (p_params.hphb != 0.f);
+                        float const radij = p_params.radius + l_params.radius;
+                        float const r_radij = ONE / radij;
 
-                    float const p_hphb = p_params.hphb * ((phphb_ltz && lhphb_gtz) ? -ONE : ONE);
-                    float const l_hphb = l_params.hphb * ((phphb_gtz && lhphb_ltz) ? -ONE : ONE);
+                        bool const bothF = (p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F);
+                        float const elcdst = bothF ? FOUR : TWO;
+                        float const elcdst1 = bothF ? QUARTER : HALF;
+                        bool const type_E = (p_params.hbtype == HBTYPE_E || l_params.hbtype == HBTYPE_E);
 
-                    float const distdslv
-                        = (phphb_ltz ? (lhphb_ltz ? NPNPDIST : NPPDIST) : (lhphb_ltz ? NPPDIST : -FloatMax));
-                    float const r_distdslv = (distdslv != 0.f) ? (ONE / distdslv) : 0.f;
+                        bool const phphb_ltz = (p_params.hphb < 0.f);
+                        bool const phphb_gtz = (p_params.hphb > 0.f);
+                        bool const phphb_nz = (p_params.hphb != 0.f);
 
-                    float const chrg_init = l_params.elsc * p_params.elsc;
-                    float const dslv_init = p_hphb + l_hphb;
+                        float const p_hphb = p_params.hphb * ((phphb_ltz && lhphb_gtz) ? -ONE : ONE);
+                        float const l_hphb = l_params.hphb * ((phphb_gtz && lhphb_ltz) ? -ONE : ONE);
 
-                    float const dx = lpos_x - p_atom.x;
-                    float const dy = lpos_y - p_atom.y;
-                    float const dz = lpos_z - p_atom.z;
-                    float const distij = alpaka::math::sqrt(dx * dx + dy * dy + dz * dz);
+                        float const distdslv
+                            = (phphb_ltz ? (lhphb_ltz ? NPNPDIST : NPPDIST) : (lhphb_ltz ? NPPDIST : -FloatMax));
+                        float const r_distdslv = (distdslv != 0.f) ? (ONE / distdslv) : 0.f;
 
-                    float const distbb = distij - radij;
-                    bool const zone1 = (distbb < ZERO);
+                        float const chrg_init = l_params.elsc * p_params.elsc;
+                        float const dslv_init = p_hphb + l_hphb;
 
-                    etot += (ONE - (distij * r_radij)) * (zone1 ? TWO * HARDNESS : 0.f);
+                        float const dx = lpos_x - p_atom.x;
+                        float const dy = lpos_y - p_atom.y;
+                        float const dz = lpos_z - p_atom.z;
+                        float const distij = alpaka::math::sqrt(dx * dx + dy * dy + dz * dz);
 
-                    float chrg_e
-                        = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
-                    if(type_E)
-                        chrg_e = -alpaka::math::abs(chrg_e);
-                    etot += chrg_e * CNSTNT;
+                        float const distbb = distij - radij;
+                        bool const zone1 = (distbb < ZERO);
 
-                    float const coeff = (ONE - (distbb * r_distdslv));
-                    float dslv_e = dslv_init * (((distbb < distdslv) && phphb_nz) ? ONE : 0.f);
-                    dslv_e *= (zone1 ? ONE : coeff);
-                    etot += dslv_e;
+                        etot += (ONE - (distij * r_radij)) * (zone1 ? TWO * HARDNESS : 0.f);
+
+                        float chrg_e
+                            = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
+                        if(type_E)
+                            chrg_e = -alpaka::math::abs(chrg_e);
+                        etot += chrg_e * CNSTNT;
+
+                        float const coeff = (ONE - (distbb * r_distdslv));
+                        float dslv_e = dslv_init * (((distbb < distdslv) && phphb_nz) ? ONE : 0.f);
+                        dslv_e *= (zone1 ? ONE : coeff);
+                        etot += dslv_e;
+                    }
                 }
-            }
 
-            outE[i] = etot * HALF;
+                outE[i] = etot * HALF;
+            }
         }
     }
 };
@@ -173,8 +187,6 @@ struct MiniBudeContext
     std::uint32_t natlig;
     std::uint32_t natpro;
     std::uint32_t ffCount;
-    ThreadSpecType threadSpec;
-
     HostDeckBuffer ligand_h;
     HostDeckBuffer protein_h;
     HostFFBuffer ff_h;
@@ -231,7 +243,6 @@ struct MiniBudeContext
         , ty_d(onHost::allocLike(device, ty_h))
         , tz_d(onHost::allocLike(device, tz_h))
         , out_d(onHost::allocLike(device, out_h))
-        , threadSpec(makeThreadSpec())
     {
     }
 
@@ -276,15 +287,42 @@ struct MiniBudeContext
         return dt.count();
     }
 
-    RunTimings run_once()
+    struct ThreadSpecInfo
+    {
+        ThreadSpecType spec;
+        std::uint32_t actualWgsize;
+    };
+
+    template<std::uint32_t T_PPWI>
+    ThreadSpecInfo makeThreadSpec(std::uint32_t requestedWgsize) const
+    {
+        using ExecDecayed = std::decay_t<decltype(exec)>;
+        if constexpr(alpaka::exec::isSeqExecutor_v<ExecDecayed>)
+        {
+            return ThreadSpecInfo{ThreadSpecType{nposes, 1u}, 1u};
+        }
+        else
+        {
+            std::uint32_t const actual = std::max(1u, requestedWgsize);
+            std::uint64_t const workPerBlock = static_cast<std::uint64_t>(actual) * static_cast<std::uint64_t>(T_PPWI);
+            std::uint32_t numBlocks = static_cast<std::uint32_t>(
+                (static_cast<std::uint64_t>(nposes) + workPerBlock - 1u) / workPerBlock);
+            if(numBlocks == 0u)
+                numBlocks = 1u;
+            return ThreadSpecInfo{ThreadSpecType{numBlocks, actual}, actual};
+        }
+    }
+
+    template<std::uint32_t T_PPWI>
+    RunTimings run(ThreadSpecType const& threadSpec)
     {
         onHost::wait(this->queue);
 
         auto const kernelStart = Clock::now();
         this->queue.enqueue(
             this->exec,
-            this->threadSpec,
-            ScorePosesKernel1D{},
+            threadSpec,
+            ScorePosesKernel1D<T_PPWI>{},
             this->ligand_d,
             this->protein_d,
             this->ff_d,
@@ -332,16 +370,37 @@ private:
         auto selector = onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
         return selector.makeDevice(0);
     }
-
-    ThreadSpecType makeThreadSpec() const
-    {
-        std::uint32_t const threadsPerBlock = 256u;
-        onHost::ThreadSpec spec{(nposes + threadsPerBlock - 1u) / threadsPerBlock, threadsPerBlock};
-        if constexpr(alpaka::isSeqExecutor(std::decay_t<decltype(exec)>{}))
-        {
-            spec.m_numThreads = decltype(spec.m_numThreads){1u};
-            spec.m_numBlocks = decltype(spec.m_numBlocks){nposes};
-        }
-        return spec;
-    }
 };
+
+inline constexpr std::array<std::uint32_t, 8> kSupportedPpwiValues{1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u};
+
+inline bool isSupportedPpwi(std::uint32_t value)
+{
+    return std::find(kSupportedPpwiValues.begin(), kSupportedPpwiValues.end(), value) != kSupportedPpwiValues.end();
+}
+
+template<typename Fn>
+auto dispatchPpwi(std::uint32_t value, Fn&& fn)
+{
+    switch(value)
+    {
+    case 1u:
+        return fn(std::integral_constant<std::uint32_t, 1u>{});
+    case 2u:
+        return fn(std::integral_constant<std::uint32_t, 2u>{});
+    case 4u:
+        return fn(std::integral_constant<std::uint32_t, 4u>{});
+    case 8u:
+        return fn(std::integral_constant<std::uint32_t, 8u>{});
+    case 16u:
+        return fn(std::integral_constant<std::uint32_t, 16u>{});
+    case 32u:
+        return fn(std::integral_constant<std::uint32_t, 32u>{});
+    case 64u:
+        return fn(std::integral_constant<std::uint32_t, 64u>{});
+    case 128u:
+        return fn(std::integral_constant<std::uint32_t, 128u>{});
+    default:
+        throw std::runtime_error("Unsupported PPWI value");
+    }
+}
