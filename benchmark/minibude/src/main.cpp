@@ -288,7 +288,7 @@ int main(int argc, char** argv)
             };
 
             bool const autotune = (args.ppwiValues.size() * args.wgsizeValues.size() > 1);
-            constexpr bool noWorkgroupBackend = decltype(context)::kIsNoWorkgroupBackend;
+            constexpr bool noWorkgroupBackend = decltype(context)::kIsSeqExecutor;
 
             for(std::uint32_t ppwi : args.ppwiValues)
             {
@@ -298,6 +298,7 @@ int main(int argc, char** argv)
                     metrics.ppwi = ppwi;
                     metrics.requestedWg = wgsize;
 
+                    bool inserted = false;
                     CachedCombo const* cacheEntry = nullptr;
 
                     dispatchPpwi(ppwi, [&](auto ppwiConst) {
@@ -331,28 +332,33 @@ int main(int argc, char** argv)
                             context.copy_energies(newEntry.energies);
 
                             cacheIt = comboCache.emplace(key, std::move(newEntry)).first;
+                            inserted = true;
                         }
 
                         cacheEntry = &cacheIt->second;
-                        metrics.actualWg = cacheEntry->actualWg;
-                        metrics.kernelStats = cacheEntry->kernelStats;
-                        metrics.contextStats = cacheEntry->contextStats;
 
-                        if(noWorkgroupBackend && metrics.requestedWg != metrics.actualWg)
+                        if(noWorkgroupBackend && specInfo.actualWgsize != wgsize)
                         {
-                            auto const clamp = std::make_pair(metrics.requestedWg, metrics.actualWg);
+                            auto const clamp = std::make_pair(wgsize, specInfo.actualWgsize);
                             if(std::find(clampedWgsizeNotes.begin(), clampedWgsizeNotes.end(), clamp)
                                 == clampedWgsizeNotes.end())
                             {
                                 clampedWgsizeNotes.push_back(clamp);
                             }
                         }
+
+                        if(inserted)
+                        {
+                            metrics.actualWg = cacheEntry->actualWg;
+                            metrics.kernelStats = cacheEntry->kernelStats;
+                            metrics.contextStats = cacheEntry->contextStats;
+                        }
                     });
 
-                    combos.push_back(metrics);
-
-                    if(cacheEntry != nullptr)
+                    if(inserted && cacheEntry != nullptr)
                     {
+                        combos.push_back(metrics);
+
                         if(!hasBest || better(metrics, metrics.kernelStats, bestMetrics, bestKernelStats))
                         {
                             hasBest = true;
@@ -400,8 +406,6 @@ int main(int argc, char** argv)
             auto const dataSummaryCsv = "poses=" + std::to_string(context.nposes) + ";ligand="
                 + std::to_string(context.natlig) + ";protein=" + std::to_string(context.natpro)
                 + ";ff=" + std::to_string(context.ffCount);
-            constexpr bool isCpuSerialBackend = decltype(context)::kIsCpuSerialBackend;
-            auto const backendTypeLabel = isCpuSerialBackend ? "sequential" : "parallel";
 
             if(args.csv)
             {
@@ -434,7 +438,6 @@ int main(int argc, char** argv)
                     std::cout << '\n';
 
                 std::cout << "Accelerator:" << acceleratorName << '\n';
-                std::cout << "BackendType:" << backendTypeLabel << '\n';
                 std::cout << "Device:" << deviceName << '\n';
                 std::cout << "Data: " << dataSummaryHuman << '\n';
                 std::cout << "Runs:" << args.runs << '\n';
