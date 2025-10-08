@@ -14,7 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <set>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -243,6 +243,18 @@ int main(int argc, char** argv)
             std::vector<ComboMetrics> combos;
             combos.reserve(args.ppwiValues.size() * args.wgsizeValues.size());
 
+            struct CachedCombo
+            {
+                TimingStats kernelStats{};
+                TimingStats contextStats{};
+                std::vector<float> energies;
+                std::uint32_t actualWg = 0u;
+            };
+
+            using ComboKey = std::pair<std::uint32_t, std::uint32_t>;
+            std::map<ComboKey, CachedCombo> comboCache;
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> clampedWgsizeNotes;
+
             ComboMetrics bestMetrics{};
             TimingStats bestKernelStats{};
             TimingStats bestContextStats{};
@@ -276,6 +288,7 @@ int main(int argc, char** argv)
             };
 
             bool const autotune = (args.ppwiValues.size() * args.wgsizeValues.size() > 1);
+            constexpr bool noWorkgroupBackend = decltype(context)::kIsNoWorkgroupBackend;
 
             for(std::uint32_t ppwi : args.ppwiValues)
             {
@@ -285,42 +298,69 @@ int main(int argc, char** argv)
                     metrics.ppwi = ppwi;
                     metrics.requestedWg = wgsize;
 
-                    std::vector<double> kernel_ms;
-                    std::vector<double> context_ms;
-                    kernel_ms.reserve(static_cast<std::size_t>(args.runs));
-                    context_ms.reserve(static_cast<std::size_t>(args.runs));
+                    CachedCombo const* cacheEntry = nullptr;
 
                     dispatchPpwi(ppwi, [&](auto ppwiConst) {
                         constexpr std::uint32_t PPWI = ppwiConst;
                         auto const specInfo = context.template makeThreadSpec<PPWI>(wgsize);
-                        metrics.actualWg = specInfo.actualWgsize;
+                        ComboKey const key{PPWI, specInfo.actualWgsize};
 
-                        context.template run<PPWI>(specInfo.spec);
-                        sink += context.accumulate_output();
-
-                        for(int r = 0; r < args.runs; ++r)
+                        auto cacheIt = comboCache.find(key);
+                        if(cacheIt == comboCache.end())
                         {
-                            auto const timings = context.template run<PPWI>(specInfo.spec);
+                            std::vector<double> kernel_ms;
+                            std::vector<double> context_ms;
+                            kernel_ms.reserve(static_cast<std::size_t>(args.runs));
+                            context_ms.reserve(static_cast<std::size_t>(args.runs));
+
+                            context.template run<PPWI>(specInfo.spec);
                             sink += context.accumulate_output();
-                            kernel_ms.push_back(timings.kernel_ms);
-                            context_ms.push_back(timings.d2h_ms);
+
+                            for(int r = 0; r < args.runs; ++r)
+                            {
+                                auto const timings = context.template run<PPWI>(specInfo.spec);
+                                sink += context.accumulate_output();
+                                kernel_ms.push_back(timings.kernel_ms);
+                                context_ms.push_back(timings.d2h_ms);
+                            }
+
+                            CachedCombo newEntry{};
+                            newEntry.kernelStats = computeStats(kernel_ms);
+                            newEntry.contextStats = computeStats(context_ms);
+                            newEntry.actualWg = specInfo.actualWgsize;
+                            context.copy_energies(newEntry.energies);
+
+                            cacheIt = comboCache.emplace(key, std::move(newEntry)).first;
+                        }
+
+                        cacheEntry = &cacheIt->second;
+                        metrics.actualWg = cacheEntry->actualWg;
+                        metrics.kernelStats = cacheEntry->kernelStats;
+                        metrics.contextStats = cacheEntry->contextStats;
+
+                        if(noWorkgroupBackend && metrics.requestedWg != metrics.actualWg)
+                        {
+                            auto const clamp = std::make_pair(metrics.requestedWg, metrics.actualWg);
+                            if(std::find(clampedWgsizeNotes.begin(), clampedWgsizeNotes.end(), clamp)
+                                == clampedWgsizeNotes.end())
+                            {
+                                clampedWgsizeNotes.push_back(clamp);
+                            }
                         }
                     });
 
-                    metrics.kernelStats = computeStats(kernel_ms);
-                    metrics.contextStats = computeStats(context_ms);
                     combos.push_back(metrics);
 
-                    std::vector<float> energies;
-                    context.copy_energies(energies);
-
-                    if(!hasBest || better(metrics, metrics.kernelStats, bestMetrics, bestKernelStats))
+                    if(cacheEntry != nullptr)
                     {
-                        hasBest = true;
-                        bestMetrics = metrics;
-                        bestKernelStats = metrics.kernelStats;
-                        bestContextStats = metrics.contextStats;
-                        bestEnergies = std::move(energies);
+                        if(!hasBest || better(metrics, metrics.kernelStats, bestMetrics, bestKernelStats))
+                        {
+                            hasBest = true;
+                            bestMetrics = metrics;
+                            bestKernelStats = metrics.kernelStats;
+                            bestContextStats = metrics.contextStats;
+                            bestEnergies = cacheEntry->energies;
+                        }
                     }
                 }
             }
@@ -360,6 +400,8 @@ int main(int argc, char** argv)
             auto const dataSummaryCsv = "poses=" + std::to_string(context.nposes) + ";ligand="
                 + std::to_string(context.natlig) + ";protein=" + std::to_string(context.natpro)
                 + ";ff=" + std::to_string(context.ffCount);
+            constexpr bool isCpuSerialBackend = decltype(context)::kIsCpuSerialBackend;
+            auto const backendTypeLabel = isCpuSerialBackend ? "sequential" : "parallel";
 
             if(args.csv)
             {
@@ -392,6 +434,7 @@ int main(int argc, char** argv)
                     std::cout << '\n';
 
                 std::cout << "Accelerator:" << acceleratorName << '\n';
+                std::cout << "BackendType:" << backendTypeLabel << '\n';
                 std::cout << "Device:" << deviceName << '\n';
                 std::cout << "Data: " << dataSummaryHuman << '\n';
                 std::cout << "Runs:" << args.runs << '\n';
@@ -405,6 +448,8 @@ int main(int argc, char** argv)
                     {
                         std::ostringstream label;
                         label << "ppwi=" << metrics.ppwi << ",wg=" << metrics.actualWg;
+                        if(metrics.requestedWg != metrics.actualWg)
+                            label << " (req=" << metrics.requestedWg << ')';
                         std::cout << std::left << std::setw(16) << label.str() << std::right << std::setw(10)
                                   << metrics.kernelStats.min << std::setw(10) << metrics.kernelStats.max
                                   << std::setw(10) << metrics.kernelStats.avg << '\n';
@@ -435,6 +480,19 @@ int main(int argc, char** argv)
                     std::cout << "verify: { valid: " << (verifyRes.valid ? "true" : "false")
                               << ", max_diff_%: " << std::setprecision(6) << verifyRes.max_diff_pct
                               << ", tol_%: " << std::setprecision(6) << args.tol_pct << " }\n";
+                }
+
+                if(!clampedWgsizeNotes.empty())
+                {
+                    std::ostringstream note;
+                    note << "# note: requested wgsize values clamped by backend: ";
+                    for(std::size_t i = 0; i < clampedWgsizeNotes.size(); ++i)
+                    {
+                        if(i != 0u)
+                            note << ", ";
+                        note << clampedWgsizeNotes[i].first << "->" << clampedWgsizeNotes[i].second;
+                    }
+                    std::cout << note.str() << '\n';
                 }
             }
 

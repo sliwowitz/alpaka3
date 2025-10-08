@@ -173,6 +173,16 @@ struct MiniBudeContext
     using DeviceFloatBuffer = std::decay_t<
         decltype(onHost::allocLike(std::declval<DeviceHandle const&>(), std::declval<HostFloatBuffer const&>()))>;
 
+    static constexpr bool kIsCpuSerialBackend
+        = std::is_same_v<ExecType, std::decay_t<decltype(alpaka::exec::cpuSerial)>>;
+#ifndef ALPAKA_DISABLE_EXEC_CpuOmpBlocks
+    static constexpr bool kIsCpuOmpBlocksBackend
+        = std::is_same_v<ExecType, std::decay_t<decltype(alpaka::exec::cpuOmpBlocks)>>;
+#else
+    static constexpr bool kIsCpuOmpBlocksBackend = false;
+#endif
+    static constexpr bool kIsNoWorkgroupBackend = kIsCpuSerialBackend || kIsCpuOmpBlocksBackend;
+
     struct RunTimings
     {
         double kernel_ms;
@@ -296,8 +306,7 @@ struct MiniBudeContext
     template<std::uint32_t T_PPWI>
     ThreadSpecInfo makeThreadSpec(std::uint32_t requestedWgsize) const
     {
-        using ExecDecayed = std::decay_t<decltype(exec)>;
-        if constexpr(alpaka::exec::isSeqExecutor_v<ExecDecayed>)
+        if constexpr(kIsNoWorkgroupBackend)
         {
             return ThreadSpecInfo{ThreadSpecType{nposes, 1u}, 1u};
         }
