@@ -22,6 +22,9 @@
 namespace onHost = alpaka::onHost;
 using alpaka::Vec;
 
+inline constexpr double kFlopsPerInteraction = 40.0; // Mirrors upstream miniBUDE
+inline constexpr double kInstsPerInteraction = 25.0; // Mirrors upstream miniBUDE
+
 // ===== Alpaka kernel and host wrapper to compute energies for all poses =====
 
 template<std::uint32_t T_PPWI>
@@ -173,8 +176,6 @@ struct MiniBudeContext
     using DeviceFloatBuffer = std::decay_t<
         decltype(onHost::allocLike(std::declval<DeviceHandle const&>(), std::declval<HostFloatBuffer const&>()))>;
 
-    static constexpr bool kIsSeqExecutor = alpaka::exec::isSeqExecutor_v<ExecType>;
-
     struct RunTimings
     {
         double kernel_ms;
@@ -298,7 +299,7 @@ struct MiniBudeContext
     template<std::uint32_t T_PPWI>
     ThreadSpecInfo makeThreadSpec(std::uint32_t requestedWgsize) const
     {
-        if constexpr(kIsSeqExecutor)
+        if constexpr(alpaka::exec::isSeqExecutor_v<ExecType>)
         {
             return ThreadSpecInfo{ThreadSpecType{nposes, 1u}, 1u};
         }
