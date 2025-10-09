@@ -413,15 +413,12 @@ int main(int argc, char** argv)
                 throw std::runtime_error("No valid configuration evaluated for miniBUDE");
 
             bool const doVerify = args.verify;
+            bool warnPoseCountMismatch = false;
             if(doVerify)
             {
                 if(!bestVerify.has_value())
                     bestVerify = verifyEnergies(refE, bestEnergies, args.tol_pct, args.rows, args.csv);
-                if(refE.size() != bestEnergies.size())
-                {
-                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
-                              << bestEnergies.size() << ")\n";
-                }
+                warnPoseCountMismatch = (refE.size() != bestEnergies.size());
             }
 
             if(!args.dump_path.empty())
@@ -514,6 +511,12 @@ int main(int argc, char** argv)
                 std::cout << "Data: " << dataSummaryHuman << '\n';
                 std::cout << "Runs:" << args.runs << '\n';
 
+                if(warnPoseCountMismatch)
+                {
+                    std::cout << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
+                              << bestEnergies.size() << ")\n";
+                }
+
                 std::cout << "results:\n";
                 for(auto const* metricsPtr : uniqueCombos)
                 {
@@ -543,10 +546,12 @@ int main(int argc, char** argv)
                     bool const valid = doVerify ? (cacheEntry->verify ? cacheEntry->verify->valid : false) : true;
                     double const maxDiffPct
                         = doVerify ? (cacheEntry->verify ? cacheEntry->verify->max_diff_pct : 0.0) : 0.0;
+                    std::ostringstream maxDiffStr;
+                    maxDiffStr << std::fixed << std::setprecision(6) << maxDiffPct;
 
                     std::cout << std::fixed << std::setprecision(3);
                     std::cout << "  - outcome:             { valid: " << (valid ? "true" : "false")
-                              << ", max_diff_%: " << maxDiffPct << " }\n";
+                              << ", max_diff_%: " << maxDiffStr.str() << " }\n";
                     std::cout << "    param:               { ppwi: " << metrics.ppwi << ", wgsize: " << metrics.actualWg
                               << " }\n";
                     std::cout << "    raw_iterations:      [" << formatSamples(kernelSamples) << "]\n";
@@ -571,15 +576,6 @@ int main(int argc, char** argv)
                           << ", sum_ms: " << bestKernelStats.sum << ", avg_ms: " << bestKernelStats.avg
                           << ", ppwi: " << bestMetrics.ppwi << ", wgsize: " << bestMetrics.actualWg << " }\n";
                 std::cout << std::defaultfloat;
-
-                if(doVerify && bestVerify)
-                {
-                    std::cout << std::fixed << std::setprecision(6);
-                    std::cout << "verify: { valid: " << (bestVerify->valid ? "true" : "false")
-                              << ", max_diff_%: " << bestVerify->max_diff_pct << ", tol_%: " << args.tol_pct
-                              << " }\n";
-                    std::cout << std::defaultfloat;
-                }
 
                 if(!clampedWgsizeNotes.empty())
                 {
