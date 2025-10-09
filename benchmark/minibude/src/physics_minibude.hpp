@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -24,6 +25,19 @@ using alpaka::Vec;
 
 inline constexpr double kFlopsPerInteraction = 40.0; // Mirrors upstream miniBUDE
 inline constexpr double kInstsPerInteraction = 25.0; // Mirrors upstream miniBUDE
+
+// Optional tuning guards (default OFF). Enable via benchmark/minibude CMake options:
+//  * MINIBUDE_USE_ALPAKA_SINCOS  (option MINIBUDE_USE_SINCOS)    -> combined sin/cos evaluations
+//  * MINIBUDE_USE_FMA            (option MINIBUDE_USE_FMA)       -> fused multiply-add in hot paths
+//  * MINIBUDE_ASSUME_ALIGNED     (option MINIBUDE_ASSUME_ALIGNED)-> align small stack arrays
+//  * MINIBUDE_UNROLL_LIGAND      (option MINIBUDE_UNROLL_LIGAND) -> extra ligand loop unroll hint
+// These toggles do not change default behaviour and can be combined for local benchmarking.
+
+#if defined(MINIBUDE_ASSUME_ALIGNED)
+#    define MINIBUDE_ALIGN alignas(64)
+#else
+#    define MINIBUDE_ALIGN
+#endif
 
 // ===== Alpaka kernel and host wrapper to compute energies for all poses =====
 
@@ -66,11 +80,32 @@ struct ScorePosesKernel1D
                 if(i >= nposes)
                     break;
 
-                float const sx = alpaka::math::sin(rx[i]), cx = alpaka::math::cos(rx[i]);
-                float const sy = alpaka::math::sin(ry[i]), cy = alpaka::math::cos(ry[i]);
-                float const sz = alpaka::math::sin(rz[i]), cz = alpaka::math::cos(rz[i]);
+                float sx;
+                float cx;
+#if defined(MINIBUDE_USE_ALPAKA_SINCOS)
+                alpaka::math::sincos(rx[i], sx, cx);
+#else
+                sx = alpaka::math::sin(rx[i]);
+                cx = alpaka::math::cos(rx[i]);
+#endif
+                float sy;
+                float cy;
+#if defined(MINIBUDE_USE_ALPAKA_SINCOS)
+                alpaka::math::sincos(ry[i], sy, cy);
+#else
+                sy = alpaka::math::sin(ry[i]);
+                cy = alpaka::math::cos(ry[i]);
+#endif
+                float sz;
+                float cz;
+#if defined(MINIBUDE_USE_ALPAKA_SINCOS)
+                alpaka::math::sincos(rz[i], sz, cz);
+#else
+                sz = alpaka::math::sin(rz[i]);
+                cz = alpaka::math::cos(rz[i]);
+#endif
 
-                float T[3][4];
+                MINIBUDE_ALIGN float T[3][4];
                 T[0][0] = cy * cz;
                 T[0][1] = sx * sy * cz - cx * sz;
                 T[0][2] = cx * sy * cz + sx * sz;
@@ -95,10 +130,28 @@ struct ScorePosesKernel1D
                     bool const lhphb_ltz = (l_params.hphb < 0.f);
                     bool const lhphb_gtz = (l_params.hphb > 0.f);
 
+#if defined(MINIBUDE_USE_FMA)
+                    float const lpos_x = alpaka::math::fma(
+                        l_atom.z,
+                        T[0][2],
+                        alpaka::math::fma(l_atom.y, T[0][1], alpaka::math::fma(l_atom.x, T[0][0], T[0][3])));
+                    float const lpos_y = alpaka::math::fma(
+                        l_atom.z,
+                        T[1][2],
+                        alpaka::math::fma(l_atom.y, T[1][1], alpaka::math::fma(l_atom.x, T[1][0], T[1][3])));
+                    float const lpos_z = alpaka::math::fma(
+                        l_atom.z,
+                        T[2][2],
+                        alpaka::math::fma(l_atom.y, T[2][1], alpaka::math::fma(l_atom.x, T[2][0], T[2][3])));
+#else
                     float const lpos_x = T[0][3] + l_atom.x * T[0][0] + l_atom.y * T[0][1] + l_atom.z * T[0][2];
                     float const lpos_y = T[1][3] + l_atom.x * T[1][0] + l_atom.y * T[1][1] + l_atom.z * T[1][2];
                     float const lpos_z = T[2][3] + l_atom.x * T[2][0] + l_atom.y * T[2][1] + l_atom.z * T[2][2];
+#endif
 
+#if defined(MINIBUDE_UNROLL_LIGAND)
+#    pragma unroll
+#endif
                     for(std::uint32_t ip = 0; ip < natpro; ++ip)
                     {
                         DeckAtom const p_atom = protein[ip];
@@ -134,18 +187,33 @@ struct ScorePosesKernel1D
                         float const distbb = distij - radij;
                         bool const zone1 = (distbb < ZERO);
 
+#if defined(MINIBUDE_USE_FMA)
+                        etot = alpaka::math::fma(
+                            (ONE - (distij * r_radij)),
+                            (zone1 ? TWO * HARDNESS : 0.f),
+                            etot);
+#else
                         etot += (ONE - (distij * r_radij)) * (zone1 ? TWO * HARDNESS : 0.f);
+#endif
 
                         float chrg_e
                             = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
                         if(type_E)
                             chrg_e = -alpaka::math::abs(chrg_e);
+#if defined(MINIBUDE_USE_FMA)
+                        etot = alpaka::math::fma(chrg_e, CNSTNT, etot);
+#else
                         etot += chrg_e * CNSTNT;
+#endif
 
                         float const coeff = (ONE - (distbb * r_distdslv));
                         float dslv_e = dslv_init * (((distbb < distdslv) && phphb_nz) ? ONE : 0.f);
                         dslv_e *= (zone1 ? ONE : coeff);
+#if defined(MINIBUDE_USE_FMA)
+                        etot = alpaka::math::fma(dslv_e, 1.0f, etot);
+#else
                         etot += dslv_e;
+#endif
                     }
                 }
 
@@ -375,6 +443,8 @@ private:
 };
 
 inline constexpr std::array<std::uint32_t, 8> kSupportedPpwiValues{1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u};
+
+#undef MINIBUDE_ALIGN
 
 inline bool isSupportedPpwi(std::uint32_t value)
 {

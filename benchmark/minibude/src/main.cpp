@@ -419,6 +419,11 @@ int main(int argc, char** argv)
                 if(!bestVerify.has_value())
                     bestVerify = verifyEnergies(refE, bestEnergies, args.tol_pct, args.rows, args.csv);
                 warnPoseCountMismatch = (refE.size() != bestEnergies.size());
+                if(warnPoseCountMismatch && args.csv)
+                {
+                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
+                              << bestEnergies.size() << ")\n";
+                }
             }
 
             if(!args.dump_path.empty())
@@ -469,7 +474,14 @@ int main(int argc, char** argv)
                     std::cout << '\n';
                 std::cout << std::fixed << std::setprecision(3);
                 std::cout << "metric,sum_ms,avg_ms,min_ms,max_ms,stddev_ms,giga_interactions_s,gflop_s,gfinst_s,"
-                             "accelerator,device,data,runs,ppwi,wgsize\n";
+                             "accelerator,device,data,runs,ppwi,wgsize";
+#ifdef MINIBUDE_ENABLE_CSV_BUILD_TAG
+                std::cout << ",build_flags_tag";
+#endif
+#ifdef MINIBUDE_ENABLE_CSV_KERNEL_TAG
+                std::cout << ",kernel_path_tag";
+#endif
+                std::cout << '\n';
                 auto emitRow = [&](
                                       std::string const& metric,
                                       TimingStats const& stats,
@@ -481,7 +493,14 @@ int main(int argc, char** argv)
                     std::cout << metric << ',' << stats.sum << ',' << stats.avg << ',' << stats.min << ','
                               << stats.max << ',' << stats.stddev << ',' << gigaInteractions << ',' << gflops << ','
                               << gfinsts << ',' << acceleratorName << ',' << deviceName << ',' << dataSummaryCsv
-                              << ',' << args.runs << ',' << metrics.ppwi << ',' << metrics.actualWg << '\n';
+                              << ',' << args.runs << ',' << metrics.ppwi << ',' << metrics.actualWg;
+#ifdef MINIBUDE_ENABLE_CSV_BUILD_TAG
+                    std::cout << ',' << MINIBUDE_BUILD_FLAGS_TAG;
+#endif
+#ifdef MINIBUDE_ENABLE_CSV_KERNEL_TAG
+                    std::cout << ',' << MINIBUDE_KERNEL_PATH_TAG;
+#endif
+                    std::cout << '\n';
                 };
                 for(auto const* metricsPtr : uniqueCombos)
                 {
@@ -497,7 +516,14 @@ int main(int argc, char** argv)
                     std::cout << "verify," << (bestVerify->valid ? 1.0 : 0.0) << ',' << bestVerify->max_diff_pct
                               << ',' << args.tol_pct << ',' << acceleratorName << ',' << deviceName << ','
                               << dataSummaryCsv << ',' << args.runs << ',' << bestMetrics.ppwi << ','
-                              << bestMetrics.actualWg << '\n';
+                              << bestMetrics.actualWg;
+#ifdef MINIBUDE_ENABLE_CSV_BUILD_TAG
+                    std::cout << ',' << MINIBUDE_BUILD_FLAGS_TAG;
+#endif
+#ifdef MINIBUDE_ENABLE_CSV_KERNEL_TAG
+                    std::cout << ',' << MINIBUDE_KERNEL_PATH_TAG;
+#endif
+                    std::cout << '\n';
                 }
                 std::cout << std::defaultfloat;
             }
