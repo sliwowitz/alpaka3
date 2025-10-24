@@ -77,7 +77,6 @@ struct Args
 {
     std::string deckDir;
     int runs = 1;
-    bool verify = false;
     double tol_pct = 0.025;
     std::size_t rows = 8;
     std::string dump_path;
@@ -118,8 +117,6 @@ static Args parseArgs(int argc, char** argv)
             next_str(a.deckDir);
         else if(s == "--runs")
             next_i(a.runs);
-        else if(s == "--verify")
-            a.verify = true;
         else if(s == "--tol-pct")
             next_d(a.tol_pct);
         else if(s == "--rows")
@@ -155,7 +152,6 @@ static Args parseArgs(int argc, char** argv)
             std::cout << "miniBUDE (CPU, deck mode)\n"
                       << "  --deck <DIR>        directory with bm1/{ligand,protein,forcefield,poses,ref_energies}\n"
                       << "  --runs <R>          timed repeats (default " << a.runs << ")\n"
-                      << "  --verify            compare against ref_energies.out\n"
                       << "  --tol-pct <pct>     tolerance percent (default " << a.tol_pct << ")\n"
                       << "  --rows <N>          number of mismatches to print (default " << a.rows << ")\n"
                       << "  --dump-energies P   write computed energies to file P\n"
@@ -236,9 +232,7 @@ int main(int argc, char** argv)
         }
     }
 
-    std::vector<float> refE;
-    if(args.verify)
-        refE = readRefEnergiesTxt(D + "/ref_energies.out");
+    std::vector<float> refE = readRefEnergiesTxt(D + "/ref_energies.out");
 
     float volatile sink = 0.0f;
     bool anyBackend = false;
@@ -258,6 +252,25 @@ int main(int argc, char** argv)
 
             MiniBudeContext<decltype(backend)> context(backend, ligand, protein, ff, dof);
             double const init_context_ms = context.init(ligand, protein, ff, dof);
+
+            auto const acceleratorName = alpaka::onHost::demangledName(context.exec);
+            auto const deviceName = context.device.getName();
+            auto const dataSummaryHuman = "poses=" + std::to_string(context.nposes) + ", ligand="
+                + std::to_string(context.natlig) + ", protein=" + std::to_string(context.natpro)
+                + ", ff=" + std::to_string(context.ffCount);
+            auto const dataSummaryCsv = "poses=" + std::to_string(context.nposes) + ";ligand="
+                + std::to_string(context.natlig) + ";protein=" + std::to_string(context.natpro)
+                + ";ff=" + std::to_string(context.ffCount);
+
+            if(!args.csv)
+            {
+                if(!firstSection)
+                    std::cout << '\n';
+                std::cout << "Accelerator:" << acceleratorName << '\n';
+                std::cout << "Device:" << deviceName << '\n';
+                std::cout << "Data: " << dataSummaryHuman << '\n';
+                std::cout << "Runs:" << args.runs << '\n';
+            }
 
             struct CachedCombo;
 
@@ -365,8 +378,7 @@ int main(int argc, char** argv)
                             newEntry.actualWg = specInfo.actualWgsize;
                             newEntry.kernelSamples = std::move(kernel_ms);
                             context.copy_energies(newEntry.energies);
-                            if(args.verify)
-                                newEntry.verify = verifyEnergies(refE, newEntry.energies, args.tol_pct, args.rows, args.csv);
+                            newEntry.verify = verifyEnergies(refE, newEntry.energies, args.tol_pct, args.rows, args.csv);
 
                             cacheIt = comboCache.emplace(key, std::move(newEntry)).first;
                             inserted = true;
@@ -412,19 +424,16 @@ int main(int argc, char** argv)
             if(!hasBest)
                 throw std::runtime_error("No valid configuration evaluated for miniBUDE");
 
-            bool const doVerify = args.verify;
-            bool warnPoseCountMismatch = false;
-            if(doVerify)
+            if(!bestVerify.has_value())
+                bestVerify = verifyEnergies(refE, bestEnergies, args.tol_pct, args.rows, args.csv);
+            bool warnPoseCountMismatch = (refE.size() != bestEnergies.size());
+            if(warnPoseCountMismatch && args.csv)
             {
-                if(!bestVerify.has_value())
-                    bestVerify = verifyEnergies(refE, bestEnergies, args.tol_pct, args.rows, args.csv);
-                warnPoseCountMismatch = (refE.size() != bestEnergies.size());
-                if(warnPoseCountMismatch && args.csv)
-                {
-                    std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
-                              << bestEnergies.size() << ")\n";
-                }
+                std::cerr << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
+                          << bestEnergies.size() << ")\n";
             }
+            if(!bestVerify.has_value())
+                bestVerify = VerifyResult{true, 0.0, {}};
 
             if(!args.dump_path.empty())
             {
@@ -437,15 +446,6 @@ int main(int argc, char** argv)
                                       : "# ERROR: failed to write " + args.dump_path + "\n");
                 }
             }
-
-            auto const acceleratorName = alpaka::onHost::demangledName(context.exec);
-            auto const deviceName = context.device.getName();
-            auto const dataSummaryHuman = "poses=" + std::to_string(context.nposes) + ", ligand="
-                + std::to_string(context.natlig) + ", protein=" + std::to_string(context.natpro)
-                + ", ff=" + std::to_string(context.ffCount);
-            auto const dataSummaryCsv = "poses=" + std::to_string(context.nposes) + ";ligand="
-                + std::to_string(context.natlig) + ";protein=" + std::to_string(context.natpro)
-                + ";ff=" + std::to_string(context.ffCount);
 
             double const interactions = static_cast<double>(context.nposes) * context.natlig * context.natpro;
 
@@ -511,7 +511,7 @@ int main(int argc, char** argv)
                 }
                 auto const [bestGInteractions, bestGflops, bestGfinsts] = throughputFor(bestMetrics);
                 emitRow("best", bestKernelStats, bestMetrics, bestGInteractions, bestGflops, bestGfinsts);
-                if(doVerify && bestVerify)
+                if(bestVerify)
                 {
                     std::cout << "verify," << (bestVerify->valid ? 1.0 : 0.0) << ',' << bestVerify->max_diff_pct
                               << ',' << args.tol_pct << ',' << acceleratorName << ',' << deviceName << ','
@@ -529,14 +529,6 @@ int main(int argc, char** argv)
             }
             else
             {
-                if(!firstSection)
-                    std::cout << '\n';
-
-                std::cout << "Accelerator:" << acceleratorName << '\n';
-                std::cout << "Device:" << deviceName << '\n';
-                std::cout << "Data: " << dataSummaryHuman << '\n';
-                std::cout << "Runs:" << args.runs << '\n';
-
                 if(warnPoseCountMismatch)
                 {
                     std::cout << "# WARNING: ref_energies count (" << refE.size() << ") != poses count ("
@@ -569,9 +561,8 @@ int main(int argc, char** argv)
                     std::size_t const energiesToPrint = std::min<std::size_t>(8u, energies.size());
                     double const contextMs = init_context_ms;
 
-                    bool const valid = doVerify ? (cacheEntry->verify ? cacheEntry->verify->valid : false) : true;
-                    double const maxDiffPct
-                        = doVerify ? (cacheEntry->verify ? cacheEntry->verify->max_diff_pct : 0.0) : 0.0;
+                    bool const valid = cacheEntry->verify ? cacheEntry->verify->valid : true;
+                    double const maxDiffPct = cacheEntry->verify ? cacheEntry->verify->max_diff_pct : 0.0;
                     std::ostringstream maxDiffStr;
                     maxDiffStr << std::fixed << std::setprecision(6) << maxDiffPct;
 

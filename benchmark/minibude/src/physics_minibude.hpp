@@ -29,15 +29,20 @@ inline constexpr double kInstsPerInteraction = 25.0; // Mirrors upstream miniBUD
 // Optional tuning guards (default OFF). Enable via benchmark/minibude CMake options:
 //  * MINIBUDE_USE_ALPAKA_SINCOS  (option MINIBUDE_USE_SINCOS)    -> combined sin/cos evaluations
 //  * MINIBUDE_USE_FMA            (option MINIBUDE_USE_FMA)       -> fused multiply-add in hot paths
-//  * MINIBUDE_ASSUME_ALIGNED     (option MINIBUDE_ASSUME_ALIGNED)-> align small stack arrays
+//  * MINIBUDE_ASSUME_ALIGNED     (option MINIBUDE_ASSUME_ALIGNED)-> align the small transform struct
 //  * MINIBUDE_UNROLL_LIGAND      (option MINIBUDE_UNROLL_LIGAND) -> extra ligand loop unroll hint
 // These toggles do not change default behaviour and can be combined for local benchmarking.
 
 #if defined(MINIBUDE_ASSUME_ALIGNED)
-#    define MINIBUDE_ALIGN alignas(64)
+struct alignas(64) MiniBudeTransform
 #else
-#    define MINIBUDE_ALIGN
+struct MiniBudeTransform
 #endif
+{
+    float t00, t01, t02, t03;
+    float t10, t11, t12, t13;
+    float t20, t21, t22, t23;
+};
 
 // ===== Alpaka kernel and host wrapper to compute energies for all poses =====
 
@@ -105,21 +110,47 @@ struct ScorePosesKernel1D
                 cz = alpaka::math::cos(rz[i]);
 #endif
 
-                MINIBUDE_ALIGN float T[3][4];
-                T[0][0] = cy * cz;
-                T[0][1] = sx * sy * cz - cx * sz;
-                T[0][2] = cx * sy * cz + sx * sz;
-                T[0][3] = tx[i];
+                float t00 = cy * cz;
+                float t01 = sx * sy * cz - cx * sz;
+                float t02 = cx * sy * cz + sx * sz;
+                float t03 = tx[i];
+                float t10 = cy * sz;
+                float t11 = sx * sy * sz + cx * cz;
+                float t12 = cx * sy * sz - sx * cz;
+                float t13 = ty[i];
+                float t20 = -sy;
+                float t21 = sx * cy;
+                float t22 = cx * cy;
+                float t23 = tz[i];
 
-                T[1][0] = cy * sz;
-                T[1][1] = sx * sy * sz + cx * cz;
-                T[1][2] = cx * sy * sz - sx * cz;
-                T[1][3] = ty[i];
-
-                T[2][0] = -sy;
-                T[2][1] = sx * cy;
-                T[2][2] = cx * cy;
-                T[2][3] = tz[i];
+#if defined(MINIBUDE_ASSUME_ALIGNED)
+                MiniBudeTransform transform{t00, t01, t02, t03, t10, t11, t12, t13, t20, t21, t22, t23};
+#    define T00 transform.t00
+#    define T01 transform.t01
+#    define T02 transform.t02
+#    define T03 transform.t03
+#    define T10 transform.t10
+#    define T11 transform.t11
+#    define T12 transform.t12
+#    define T13 transform.t13
+#    define T20 transform.t20
+#    define T21 transform.t21
+#    define T22 transform.t22
+#    define T23 transform.t23
+#else
+#    define T00 t00
+#    define T01 t01
+#    define T02 t02
+#    define T03 t03
+#    define T10 t10
+#    define T11 t11
+#    define T12 t12
+#    define T13 t13
+#    define T20 t20
+#    define T21 t21
+#    define T22 t22
+#    define T23 t23
+#endif
 
                 float etot = 0.0f;
 
@@ -133,20 +164,20 @@ struct ScorePosesKernel1D
 #if defined(MINIBUDE_USE_FMA)
                     float const lpos_x = alpaka::math::fma(
                         l_atom.z,
-                        T[0][2],
-                        alpaka::math::fma(l_atom.y, T[0][1], alpaka::math::fma(l_atom.x, T[0][0], T[0][3])));
+                        T02,
+                        alpaka::math::fma(l_atom.y, T01, alpaka::math::fma(l_atom.x, T00, T03)));
                     float const lpos_y = alpaka::math::fma(
                         l_atom.z,
-                        T[1][2],
-                        alpaka::math::fma(l_atom.y, T[1][1], alpaka::math::fma(l_atom.x, T[1][0], T[1][3])));
+                        T12,
+                        alpaka::math::fma(l_atom.y, T11, alpaka::math::fma(l_atom.x, T10, T13)));
                     float const lpos_z = alpaka::math::fma(
                         l_atom.z,
-                        T[2][2],
-                        alpaka::math::fma(l_atom.y, T[2][1], alpaka::math::fma(l_atom.x, T[2][0], T[2][3])));
+                        T22,
+                        alpaka::math::fma(l_atom.y, T21, alpaka::math::fma(l_atom.x, T20, T23)));
 #else
-                    float const lpos_x = T[0][3] + l_atom.x * T[0][0] + l_atom.y * T[0][1] + l_atom.z * T[0][2];
-                    float const lpos_y = T[1][3] + l_atom.x * T[1][0] + l_atom.y * T[1][1] + l_atom.z * T[1][2];
-                    float const lpos_z = T[2][3] + l_atom.x * T[2][0] + l_atom.y * T[2][1] + l_atom.z * T[2][2];
+                    float const lpos_x = T03 + l_atom.x * T00 + l_atom.y * T01 + l_atom.z * T02;
+                    float const lpos_y = T13 + l_atom.x * T10 + l_atom.y * T11 + l_atom.z * T12;
+                    float const lpos_z = T23 + l_atom.x * T20 + l_atom.y * T21 + l_atom.z * T22;
 #endif
 
 #if defined(MINIBUDE_UNROLL_LIGAND)
@@ -185,19 +216,16 @@ struct ScorePosesKernel1D
                         float const distij = alpaka::math::sqrt(dx * dx + dy * dy + dz * dz);
 
                         float const distbb = distij - radij;
-                        bool const zone1 = (distbb < ZERO);
+                        int const zone1 = (distbb < ZERO);
 
+                        float const steric_factor = zone1 ? (TWO * HARDNESS) : 0.f;
 #if defined(MINIBUDE_USE_FMA)
-                        etot = alpaka::math::fma(
-                            (ONE - (distij * r_radij)),
-                            (zone1 ? TWO * HARDNESS : 0.f),
-                            etot);
+                        etot = alpaka::math::fma((ONE - (distij * r_radij)), steric_factor, etot);
 #else
-                        etot += (ONE - (distij * r_radij)) * (zone1 ? TWO * HARDNESS : 0.f);
+                        etot += (ONE - (distij * r_radij)) * steric_factor;
 #endif
 
-                        float chrg_e
-                            = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
+                        float chrg_e = chrg_init * ((zone1 ? ONE : (ONE - distbb * elcdst1)) * ((distbb < elcdst) ? ONE : ZERO));
                         if(type_E)
                             chrg_e = -alpaka::math::abs(chrg_e);
 #if defined(MINIBUDE_USE_FMA)
@@ -220,6 +248,33 @@ struct ScorePosesKernel1D
                 outE[i] = etot * HALF;
             }
         }
+#if defined(MINIBUDE_ASSUME_ALIGNED)
+#    undef T00
+#    undef T01
+#    undef T02
+#    undef T03
+#    undef T10
+#    undef T11
+#    undef T12
+#    undef T13
+#    undef T20
+#    undef T21
+#    undef T22
+#    undef T23
+#else
+#    undef T00
+#    undef T01
+#    undef T02
+#    undef T03
+#    undef T10
+#    undef T11
+#    undef T12
+#    undef T13
+#    undef T20
+#    undef T21
+#    undef T22
+#    undef T23
+#endif
     }
 };
 
@@ -443,8 +498,6 @@ private:
 };
 
 inline constexpr std::array<std::uint32_t, 8> kSupportedPpwiValues{1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u};
-
-#undef MINIBUDE_ALIGN
 
 inline bool isSupportedPpwi(std::uint32_t value)
 {
