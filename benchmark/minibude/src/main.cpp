@@ -272,7 +272,15 @@ int main(int argc, char** argv)
                 std::cout << "Runs:" << args.runs << '\n';
             }
 
-            struct CachedCombo;
+            struct CachedCombo
+            {
+                TimingStats kernelStats{};
+                TimingStats contextStats{};
+                std::vector<float> energies;
+                std::uint32_t actualWg = 0u;
+                std::vector<double> kernelSamples;
+                std::optional<VerifyResult> verify;
+            };
 
             struct ComboMetrics
             {
@@ -286,16 +294,6 @@ int main(int argc, char** argv)
 
             std::vector<ComboMetrics> combos;
             combos.reserve(args.ppwiValues.size() * args.wgsizeValues.size());
-
-            struct CachedCombo
-            {
-                TimingStats kernelStats{};
-                TimingStats contextStats{};
-                std::vector<float> energies;
-                std::uint32_t actualWg = 0u;
-                std::vector<double> kernelSamples;
-                std::optional<VerifyResult> verify;
-            };
 
             using ComboKey = std::pair<std::uint32_t, std::uint32_t>;
             std::map<ComboKey, CachedCombo> comboCache;

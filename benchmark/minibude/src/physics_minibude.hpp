@@ -49,19 +49,31 @@ struct MiniBudeTransform
 template<std::uint32_t T_PPWI>
 struct ScorePosesKernel1D
 {
-    template<typename TAcc>
+    // The `MdSpan` templates can be replaced with `MdSpan auto` types in nvcc 13.2+
+    template<
+        alpaka::concepts::MdSpan T_ligand,
+        alpaka::concepts::MdSpan T_protein,
+        alpaka::concepts::MdSpan T_ff,
+        alpaka::concepts::MdSpan T_rx,
+        alpaka::concepts::MdSpan T_ry,
+        alpaka::concepts::MdSpan T_rz,
+        alpaka::concepts::MdSpan T_tx,
+        alpaka::concepts::MdSpan T_ty,
+        alpaka::concepts::MdSpan T_tz,
+        alpaka::concepts::MdSpan T_outE
+    >
     ALPAKA_FN_ACC void operator()(
-        TAcc const& acc,
-        alpaka::concepts::MdSpan auto const ligand,
-        alpaka::concepts::MdSpan auto const protein,
-        alpaka::concepts::MdSpan auto const ff,
-        alpaka::concepts::MdSpan auto const rx,
-        alpaka::concepts::MdSpan auto const ry,
-        alpaka::concepts::MdSpan auto const rz,
-        alpaka::concepts::MdSpan auto const tx,
-        alpaka::concepts::MdSpan auto const ty,
-        alpaka::concepts::MdSpan auto const tz,
-        alpaka::concepts::MdSpan auto outE,
+        auto const& acc,
+        T_ligand const ligand,
+        T_protein const protein,
+        T_ff const ff,
+        T_rx const rx,
+        T_ry const ry,
+        T_rz const rz,
+        T_tx const tx,
+        T_ty const ty,
+        T_tz const tz,
+        T_outE outE,
         std::uint32_t natlig,
         std::uint32_t natpro,
         std::uint32_t nposes) const
