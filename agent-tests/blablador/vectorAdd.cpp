@@ -1,4 +1,5 @@
 #include <alpaka/alpaka.hpp>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <random>
@@ -74,18 +75,28 @@ void runVectorAdd()
     auto extents = onHost::getExtents(buf_a);
     auto dataBlocking = onHost::FrameSpec{extents, static_cast<std::size_t>(1)};
 
+    auto startTotal = std::chrono::high_resolution_clock::now();
+
+    auto startKernel = std::chrono::high_resolution_clock::now();
     queue.enqueue(exec, dataBlocking, KernelBundle{VecAddKernel{}, buf_a, buf_b, buf_c});
     onHost::wait(queue);
+    auto endKernel = std::chrono::high_resolution_clock::now();
 
     memcpy(queue, h_c, buf_c);
     onHost::wait(queue);
+    auto endTotal = std::chrono::high_resolution_clock::now();
 
     T sum = 0;
     for(std::size_t i = 0; i < N; ++i)
     {
         sum += h_c[i];
     }
+    auto kernelTime = std::chrono::duration<double>(endKernel - startKernel).count();
+    auto totalTime = std::chrono::duration<double>(endTotal - startTotal).count();
+
     std::cout << "Sum of result vector: " << sum << std::endl;
+    std::cout << "Kernel time: " << kernelTime * 1000.0 << " ms" << std::endl;
+    std::cout << "Total time (including transfers): " << totalTime * 1000.0 << " ms" << std::endl;
     std::cout << "Vector addition completed successfully!" << std::endl;
 }
 

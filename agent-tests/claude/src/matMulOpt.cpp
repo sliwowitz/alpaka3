@@ -1,219 +1,264 @@
+/* Optimized tiled matrix multiplication C(M,N) = A(M,K) * B(K,N).
+ *
+ * Optimizations over the naive version:
+ *   1. Shared-memory tiling: A and B tiles (BM×BK, BK×BN) are loaded into
+ *      fast on-chip memory, reducing global memory traffic by ~BM/4 ×.
+ *   2. Register-level micro-tiles: each thread computes a TM×TN sub-block of C,
+ *      reusing loaded A/B values across the outer product.
+ *   3. Shared-memory accumulator: persists partial sums across K-tiles using
+ *      the same pattern as the alpaka nBody example.
+ *
+ * Usage: matMulOpt M K N
+ */
+
 #include <alpaka/alpaka.hpp>
-#include <cstdint>
+
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <random>
-#include <vector>
-
-#ifndef MATRIX_M
-#define MATRIX_M 1000
-#endif
-
-#ifndef MATRIX_K
-#define MATRIX_K 1000
-#endif
-
-#ifndef MATRIX_N
-#define MATRIX_N 1000
-#endif
 
 using namespace alpaka;
 
-constexpr int BLOCK_SIZE = 16;
+// --- Tile parameters ---
+// Block output tile: BM × BN.  K-tile width: BK.
+// Each thread computes a TM × TN micro-tile of C.
+// Thread block: (BM/TM) × (BN/TN) = 16 × 16 = 256 threads.
+static constexpr uint32_t BM = 64;
+static constexpr uint32_t BN = 64;
+static constexpr uint32_t BK = 16;
+static constexpr uint32_t TM = 4;
+static constexpr uint32_t TN = 4;
 
-struct MatMulKernelOpt
+class MatMulTiledKernel
 {
-    template<typename Acc>
-    ALPAKA_FN_ACC void operator()(Acc const& acc, auto a, auto b, auto c, int k, int n, int m) const
+public:
+    ALPAKA_FN_ACC auto operator()(
+        auto const& acc,
+        alpaka::concepts::IMdSpan auto const A,
+        alpaka::concepts::IMdSpan auto const B,
+        alpaka::concepts::IMdSpan auto C,
+        std::size_t M,
+        std::size_t K,
+        std::size_t N) const -> void
     {
-        auto ext = acc.getExtentsOf(onAcc::origin::grid, onAcc::unit::blocks);
-        auto idx = acc.getIdxWithin(onAcc::origin::grid, onAcc::unit::blocks);
-
-        auto blocksPerRow = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        auto blockRow = static_cast<std::size_t>(idx[0]) / static_cast<std::size_t>(blocksPerRow);
-        auto blockCol = static_cast<std::size_t>(idx[0]) % static_cast<std::size_t>(blocksPerRow);
-
-        auto row = blockRow * BLOCK_SIZE;
-        auto col = blockCol * BLOCK_SIZE;
-
-        auto n_val = static_cast<std::size_t>(n);
-        auto k_val = static_cast<std::size_t>(k);
-        auto m_val = static_cast<std::size_t>(m);
-
-        if(row >= m_val || col >= n_val)
-            return;
-
-        float sum[BLOCK_SIZE][BLOCK_SIZE];
-        #pragma unroll
-        for(int i = 0; i < BLOCK_SIZE; ++i)
-            #pragma unroll
-            for(int j = 0; j < BLOCK_SIZE; ++j)
-                sum[i][j] = 0.0f;
-
-        for(int t = 0; t < k; t += BLOCK_SIZE)
+        // Iterate over output tiles of C
+        for(concepts::Dim<2u> auto blockStart : onAcc::makeIdxMap(
+                acc,
+                onAcc::worker::blocksInGrid,
+                IdxRange{
+                    Vec<std::size_t, 2u>{0, 0},
+                    Vec<std::size_t, 2u>{M, N},
+                    Vec<std::size_t, 2u>{BM, BN}}))
         {
-            float aTile[BLOCK_SIZE][BLOCK_SIZE];
-            float bTile[BLOCK_SIZE][BLOCK_SIZE];
+            // Shared memory tiles
+            auto tileA = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, BM, BK>{});
+            auto tileB = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, BK, BN>{});
+            // Shared accumulator — persists across K-tiles (same pattern as nBody accelerations)
+            auto accumC = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, BM, BN>{});
 
-            #pragma unroll
-            for(int i = 0; i < BLOCK_SIZE; ++i)
+            // Zero the accumulator (4096 elems / 256 threads = 16 per thread)
+            onAcc::syncBlockThreads(acc);
+            for(auto idx : onAcc::makeIdxMap(
+                    acc,
+                    onAcc::worker::threadsInBlock,
+                    IdxRange{CVec<uint32_t, BM, BN>{}}))
             {
-                #pragma unroll
-                for(int j = 0; j < BLOCK_SIZE; ++j)
-                {
-                    auto aRow = row + i;
-                    auto aCol = t + j;
-                    auto bRow = static_cast<std::size_t>(t) + i;
-                    auto bCol = col + j;
-
-                    aTile[i][j] = (aRow < m_val && aCol < k_val) 
-                        ? a[aRow * k_val + aCol] : 0.0f;
-                    bTile[i][j] = (bRow < k_val && bCol < n_val) 
-                        ? b[bRow * n_val + bCol] : 0.0f;
-                }
+                accumC[idx] = 0.0f;
             }
 
-            #pragma unroll
-            for(int i = 0; i < BLOCK_SIZE; ++i)
+            // --- K-tile loop (plain loop, like nBody's otherBlockStartIdx loop) ---
+            for(std::size_t kt = 0; kt < K; kt += BK)
             {
-                #pragma unroll
-                for(int j = 0; j < BLOCK_SIZE; ++j)
+                // Load tileA  [BM × BK] from A  (1024 elems / 256 threads = 4 each)
+                onAcc::syncBlockThreads(acc);
+                for(auto idx : onAcc::makeIdxMap(
+                        acc,
+                        onAcc::worker::threadsInBlock,
+                        IdxRange{CVec<uint32_t, BM, BK>{}}))
                 {
-                    #pragma unroll
-                    for(int l = 0; l < BLOCK_SIZE; ++l)
+                    auto r = blockStart[0] + static_cast<std::size_t>(idx[0]);
+                    auto c = kt + static_cast<std::size_t>(idx[1]);
+                    tileA[idx] = (r < M && c < K) ? A[Vec{r, c}] : 0.0f;
+                }
+
+                // Load tileB  [BK × BN] from B  (1024 elems / 256 threads = 4 each)
+                for(auto idx : onAcc::makeIdxMap(
+                        acc,
+                        onAcc::worker::threadsInBlock,
+                        IdxRange{CVec<uint32_t, BK, BN>{}}))
+                {
+                    auto r = kt + static_cast<std::size_t>(idx[0]);
+                    auto c = blockStart[1] + static_cast<std::size_t>(idx[1]);
+                    tileB[idx] = (r < K && c < N) ? B[Vec{r, c}] : 0.0f;
+                }
+
+                onAcc::syncBlockThreads(acc);
+
+                // Compute micro-tiles: each thread owns a TM×TN sub-block
+                for(auto tIdx : onAcc::makeIdxMap(
+                        acc,
+                        onAcc::worker::threadsInBlock,
+                        IdxRange{CVec<uint32_t, BM / TM, BN / TN>{}}))
+                {
+                    // Register-level partial sums for this K-tile
+                    float rc[TM][TN] = {};
+
+                    for(uint32_t k = 0; k < BK; ++k)
                     {
-                        sum[i][j] += aTile[i][l] * bTile[l][j];
-                    }
-                }
-            }
-        }
+                        // Preload A column and B row into registers
+                        float ra[TM], rb[TN];
+                        for(uint32_t i = 0; i < TM; ++i)
+                            ra[i] = tileA[Vec{tIdx[0] * TM + i, k}];
+                        for(uint32_t j = 0; j < TN; ++j)
+                            rb[j] = tileB[Vec{k, tIdx[1] * TN + j}];
 
-        #pragma unroll
-        for(int i = 0; i < BLOCK_SIZE; ++i)
-        {
-            #pragma unroll
-            for(int j = 0; j < BLOCK_SIZE; ++j)
-            {
-                auto cRow = row + i;
-                auto cCol = col + j;
-                if(cRow < m_val && cCol < n_val)
-                {
-                    c[cRow * n_val + cCol] = sum[i][j];
+                        // Rank-1 update (outer product)
+                        for(uint32_t i = 0; i < TM; ++i)
+                            for(uint32_t j = 0; j < TN; ++j)
+                                rc[i][j] += ra[i] * rb[j];
+                    }
+
+                    // Flush partial sums to shared accumulator
+                    for(uint32_t i = 0; i < TM; ++i)
+                        for(uint32_t j = 0; j < TN; ++j)
+                            accumC[Vec{tIdx[0] * TM + i, tIdx[1] * TN + j}] += rc[i][j];
                 }
+            } // end K-tile loop
+
+            // Write final results to global memory
+            onAcc::syncBlockThreads(acc);
+            for(auto idx : onAcc::makeIdxMap(
+                    acc,
+                    onAcc::worker::threadsInBlock,
+                    IdxRange{CVec<uint32_t, BM, BN>{}}))
+            {
+                auto r = blockStart[0] + static_cast<std::size_t>(idx[0]);
+                auto c = blockStart[1] + static_cast<std::size_t>(idx[1]);
+                if(r < M && c < N)
+                    C[Vec{r, c}] = accumC[idx];
             }
         }
     }
 };
 
-template<typename T>
-void runMatMul(int m, int k, int n)
+auto run(auto const deviceSpec, auto const exec, std::size_t M, std::size_t K, std::size_t N) -> int
 {
-#if defined(ALPAKA_DISABLE_EXEC_GpuCuda)
-    auto api = api::host;
-    auto deviceKind = deviceKind::cpu;
-    auto exec = exec::cpuOmpBlocks;
-#else
-    auto api = api::cuda;
-    auto deviceKind = deviceKind::nvidiaGpu;
-    auto exec = exec::gpuCuda;
-#endif
+    using Data = float;
 
-    auto deviceSpec = onHost::DeviceSpec{api, deviceKind};
+    Vec<std::size_t, 2u> const extA{M, K};
+    Vec<std::size_t, 2u> const extB{K, N};
+    Vec<std::size_t, 2u> const extC{M, N};
 
+    std::cout << "--- Backend: " << onHost::demangledName(exec) << " ("
+              << deviceSpec.getApi().getName() << " " << deviceSpec.getDeviceKind().getName() << ") ---\n";
+    std::cout << "A(" << M << "x" << K << ") * B(" << K << "x" << N << ") = C(" << M << "x" << N << ")\n";
+
+    // Device and queue
     auto devSelector = onHost::makeDeviceSelector(deviceSpec);
-    if(!devSelector.isAvailable())
-    {
-        std::cout << "No device available for " << deviceSpec.getName() << std::endl;
-        return;
-    }
-
     onHost::Device devAcc = devSelector.makeDevice(0);
-    std::cout << "Using device: " << onHost::getName(devAcc) << std::endl;
-
     onHost::Queue queue = devAcc.makeQueue();
 
-    std::size_t totalElementsA = static_cast<std::size_t>(m) * static_cast<std::size_t>(k);
-    std::size_t totalElementsB = static_cast<std::size_t>(k) * static_cast<std::size_t>(n);
-    std::size_t totalElementsC = static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
-    std::size_t totalElements = totalElementsA + totalElementsB + totalElementsC;
+    // Host buffers
+    auto hA = onHost::allocHost<Data>(extA);
+    auto hB = onHost::allocHost<Data>(extB);
+    auto hC = onHost::allocHost<Data>(extC);
 
-    std::vector<T> h_a(totalElementsA), h_b(totalElementsB), h_c(totalElementsC);
-    std::mt19937 gen(42);
-    std::uniform_real_distribution<T> dist(0.0, 1.0);
+    std::mt19937 rng{42};
+    std::uniform_real_distribution<Data> dist(-1.0f, 1.0f);
+    for(std::size_t i = 0; i < M; ++i)
+        for(std::size_t j = 0; j < K; ++j)
+            hA[Vec{i, j}] = dist(rng);
+    for(std::size_t i = 0; i < K; ++i)
+        for(std::size_t j = 0; j < N; ++j)
+            hB[Vec{i, j}] = dist(rng);
 
-    for(std::size_t i = 0; i < totalElementsA; ++i)
-        h_a[i] = dist(gen);
-    for(std::size_t i = 0; i < totalElementsB; ++i)
-        h_b[i] = dist(gen);
+    // Device buffers
+    auto dA = onHost::allocLike(devAcc, hA);
+    auto dB = onHost::allocLike(devAcc, hB);
+    auto dC = onHost::allocLike(devAcc, hC);
 
-    auto buf_a = onHost::alloc<T>(devAcc, totalElementsA);
-    auto buf_b = onHost::alloc<T>(devAcc, totalElementsB);
-    auto buf_c = onHost::alloc<T>(devAcc, totalElementsC);
-
-    std::cout << "Copying to device..." << std::endl;
-    auto startTotal = std::chrono::high_resolution_clock::now();
-
-    memcpy(queue, buf_a, h_a);
-    memcpy(queue, buf_b, h_b);
+    onHost::memcpy(queue, dA, hA);
+    onHost::memcpy(queue, dB, hB);
+    onHost::memset(queue, dC, uint8_t{0});
     onHost::wait(queue);
 
-    int blocksX = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    int blocksY = (m + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    int totalBlocks = blocksX * blocksY;
-    auto extents = static_cast<std::size_t>(totalBlocks);
-    auto dataBlocking = onHost::FrameSpec{extents, static_cast<std::size_t>(1)};
+    // FrameSpec: 16×16 thread block, ceil(M/BM) × ceil(N/BN) blocks
+    Vec<std::size_t, 2u> threadBlock{BM / TM, BN / TN}; // 16 × 16
+    Vec<std::size_t, 2u> numBlocks{divCeil(M, std::size_t{BM}), divCeil(N, std::size_t{BN})};
+    auto dataBlocking = onHost::FrameSpec{numBlocks, threadBlock};
 
-    std::cout << "Running optimized kernel..." << std::endl;
-    auto startKernel = std::chrono::high_resolution_clock::now();
-    queue.enqueue(exec, dataBlocking, KernelBundle{MatMulKernelOpt{}, buf_a, buf_b, buf_c, k, n, m});
-    onHost::wait(queue);
-    auto endKernel = std::chrono::high_resolution_clock::now();
+    MatMulTiledKernel kernel;
+    auto const taskKernel = KernelBundle{kernel, dA, dB, dC, M, K, N};
 
-    std::cout << "Copying back..." << std::endl;
-    memcpy(queue, h_c, buf_c);
+    // Warmup
+    queue.enqueue(exec, dataBlocking, taskKernel);
     onHost::wait(queue);
 
-    auto endTotal = std::chrono::high_resolution_clock::now();
+    // Timed run
+    onHost::memset(queue, dC, uint8_t{0});
+    onHost::wait(queue);
+    auto const t0 = std::chrono::high_resolution_clock::now();
+    queue.enqueue(exec, dataBlocking, taskKernel);
+    onHost::wait(queue);
+    auto const t1 = std::chrono::high_resolution_clock::now();
 
-    T sum = 0;
-    for(std::size_t i = 0; i < totalElementsC; ++i)
-        sum += h_c[i];
+    double const kernelMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    double const gflops = 2.0 * M * N * K / (kernelMs * 1e6);
+    std::cout << "Kernel time: " << kernelMs << " ms  (" << gflops << " GFLOP/s)\n";
 
-    auto kernelTime = std::chrono::duration<double>(endKernel - startKernel).count();
-    auto totalTime = std::chrono::duration<double>(endTotal - startTotal).count();
+    // Copy result back
+    onHost::memcpy(queue, hC, dC);
+    onHost::wait(queue);
 
-    std::cout << "Matrix sizes: " << m << "x" << k << " * " << k << "x" << n << " = " << m << "x" << n << std::endl;
-    std::cout << "Block size: " << BLOCK_SIZE << "x" << BLOCK_SIZE << std::endl;
-    std::cout << "Grid: " << blocksX << "x" << blocksY << " = " << totalBlocks << " blocks" << std::endl;
-    std::cout << "Total elements: " << totalElements << std::endl;
-    std::cout << "Sum of result: " << sum << std::endl;
-    std::cout << "Kernel time: " << kernelTime * 1000.0 << " ms" << std::endl;
-    std::cout << "Total time (including transfers): " << totalTime * 1000.0 << " ms" << std::endl;
-    std::cout << "Matrix multiplication completed successfully!" << std::endl;
-}
-
-int main(int argc, char* argv[])
-{
-    int m = MATRIX_M;
-    int k = MATRIX_K;
-    int n = MATRIX_N;
-
-    if(argc >= 4)
+    // Validate sample
+    int errors = 0;
+    std::mt19937 sampleRng{123};
+    constexpr int NUM_CHECKS = 256;
+    for(int s = 0; s < NUM_CHECKS; ++s)
     {
-        m = std::atoi(argv[1]);
-        k = std::atoi(argv[2]);
-        n = std::atoi(argv[3]);
+        std::size_t i = sampleRng() % M;
+        std::size_t j = sampleRng() % N;
+        double ref = 0.0;
+        for(std::size_t k = 0; k < K; ++k)
+            ref += static_cast<double>(hA[Vec{i, k}]) * static_cast<double>(hB[Vec{k, j}]);
+        float expected = static_cast<float>(ref);
+        float got = hC[Vec{i, j}];
+        float relErr = std::abs(got - expected) / (std::abs(expected) + 1e-7f);
+        if(relErr > 1e-3f)
+        {
+            if(errors < 10)
+                std::cerr << "  MISMATCH [" << i << "," << j << "]: " << got << " vs " << expected
+                          << " (relErr=" << relErr << ")\n";
+            ++errors;
+        }
     }
 
-    std::cout << "Optimized Matrix multiplication (" << m << "x" << k << " * " << k << "x" << n << ")" << std::endl;
+    if(errors == 0)
+        std::cout << "Validation PASSED (" << NUM_CHECKS << " samples)\n\n";
+    else
+        std::cout << "Validation FAILED " << errors << "/" << NUM_CHECKS << "\n\n";
 
-#if defined(ALPAKA_DISABLE_EXEC_GpuCuda)
-    std::cout << "\n--- Using OpenMP backend ---" << std::endl;
-#else
-    std::cout << "\n--- Using CUDA backend ---" << std::endl;
-#endif
+    return errors == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
 
-    runMatMul<float>(m, k, n);
+auto main(int argc, char* argv[]) -> int
+{
+    if(argc != 4)
+    {
+        std::cerr << "Usage: " << argv[0] << " M K N\n"
+                  << "  C(M,N) = A(M,K) * B(K,N)   [tiled: BM=" << BM << " BN=" << BN << " BK=" << BK
+                  << " TM=" << TM << " TN=" << TN << "]\n";
+        return EXIT_FAILURE;
+    }
 
-    return 0;
+    std::size_t M = std::stoul(argv[1]);
+    std::size_t K = std::stoul(argv[2]);
+    std::size_t N = std::stoul(argv[3]);
+
+    return onHost::executeForEachIfHasDevice(
+        [=](auto const& backend)
+        { return run(backend[alpaka::object::deviceSpec], backend[alpaka::object::exec], M, K, N); },
+        onHost::allBackends(onHost::enabledApis, exec::enabledExecutors));
 }

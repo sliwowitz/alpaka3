@@ -41,9 +41,7 @@ auto run(auto const deviceSpec, auto const exec, std::size_t M, std::size_t K, s
     Vec<std::size_t, 2u> const extB{K, N};
     Vec<std::size_t, 2u> const extC{M, N};
 
-    std::string execName = "cpuOmpBlocks";
-    try { execName = onHost::demangledName(exec); } catch(...) {}
-    std::cout << "--- Backend: " << execName << " ("
+    std::cout << "--- Backend: " << onHost::demangledName(exec) << " ("
               << deviceSpec.getApi().getName() << " " << deviceSpec.getDeviceKind().getName() << ") ---\n";
     std::cout << "A(" << M << "x" << K << ") * B(" << K << "x" << N << ") = C(" << M << "x" << N << ")\n";
     std::cout << "Total elements: " << M * K + K * N + M * N << "\n";
@@ -145,15 +143,8 @@ auto main(int argc, char* argv[]) -> int
     std::size_t K = std::stoul(argv[2]);
     std::size_t N = std::stoul(argv[3]);
 
-#if defined(ALPAKA_DISABLE_EXEC_GpuCuda)
-    std::cout << "\n--- Using OpenMP backend ---\n" << std::endl;
-    auto deviceSpec = onHost::DeviceSpec{api::host, deviceKind::cpu};
-    auto exec = exec::cpuOmpBlocks;
-#else
-    std::cout << "\n--- Using CUDA backend ---\n" << std::endl;
-    auto deviceSpec = onHost::DeviceSpec{api::cuda, deviceKind::nvidiaGpu};
-    auto exec = exec::gpuCuda;
-#endif
-
-    return run(deviceSpec, exec, M, K, N);
+    return onHost::executeForEachIfHasDevice(
+        [=](auto const& backend)
+        { return run(backend[alpaka::object::deviceSpec], backend[alpaka::object::exec], M, K, N); },
+        onHost::allBackends(onHost::enabledApis, exec::enabledExecutors));
 }

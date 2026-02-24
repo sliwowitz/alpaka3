@@ -29,42 +29,29 @@ public:
     }
 };
 
-auto run() -> int
+auto run(auto const deviceSpec, auto const exec) -> int
 {
-#if defined(ALPAKA_DISABLE_EXEC_GpuCuda)
-    auto deviceSpec = onHost::DeviceSpec{api::host, deviceKind::cpu};
-    auto exec = exec::cpuOmpBlocks;
-#else
-    auto deviceSpec = onHost::DeviceSpec{api::cuda, deviceKind::nvidiaGpu};
-    auto exec = exec::gpuCuda;
-#endif
-
     using Data = float;
     using IdxVec = Vec<std::size_t, 2u>;
 
     IdxVec const extent{M, N};
 
-    std::string execName = "cpuOmpBlocks";
-    try { execName = onHost::demangledName(exec); } catch(...) {}
-    std::cout << "--- Backend: " << execName << " ("
+    std::cout << "--- Backend: " << onHost::demangledName(exec) << " ("
               << deviceSpec.getApi().getName() << " " << deviceSpec.getDeviceKind().getName()
               << ") ---\n";
     std::cout << "Matrix size: " << M << " x " << N << "\n";
 
+    // Device and queue
     auto devSelector = onHost::makeDeviceSelector(deviceSpec);
-    if(!devSelector.isAvailable())
-    {
-        std::cout << "No device available\n";
-        return EXIT_FAILURE;
-    }
-    
     onHost::Device devAcc = devSelector.makeDevice(0);
     onHost::Queue queue = devAcc.makeQueue();
 
+    // Host buffers
     auto hA = onHost::allocHost<Data>(extent);
     auto hB = onHost::allocHostLike(hA);
     auto hC = onHost::allocHostLike(hA);
 
+    // Fill with random data
     std::mt19937 rng{42};
     std::uniform_real_distribution<Data> dist(0.0f, 1.0f);
     for(std::size_t r = 0; r < M; ++r)
@@ -77,18 +64,22 @@ auto run() -> int
         }
     }
 
+    // Device buffers
     auto dA = onHost::allocLike(devAcc, hA);
     auto dB = onHost::allocLike(devAcc, hB);
     auto dC = onHost::allocLike(devAcc, hC);
 
+    // Copy host -> device
     onHost::memcpy(queue, dA, hA);
     onHost::memcpy(queue, dB, hB);
     onHost::memset(queue, dC, uint8_t{0});
     onHost::wait(queue);
 
+    // 2D work division: 16x16 thread blocks
     Vec<std::size_t, 2u> chunkSize{16u, 16u};
     auto dataBlocking = onHost::FrameSpec{divCeil(extent, chunkSize), chunkSize};
 
+    // Launch kernel
     MatrixAddKernel kernel;
     auto const taskKernel = KernelBundle{kernel, dA, dB, dC, extent};
 
@@ -100,9 +91,11 @@ auto run() -> int
     double const kernelMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
     std::cout << "Kernel time: " << kernelMs << " ms\n";
 
+    // Copy result back
     onHost::memcpy(queue, hC, dC);
     onHost::wait(queue);
 
+    // Validate
     int errors = 0;
     for(std::size_t r = 0; r < M; ++r)
     {
@@ -129,13 +122,7 @@ auto run() -> int
 
 auto main() -> int
 {
-    std::cout << "Matrix addition (" << M << " x " << N << ")\n";
-
-#if defined(ALPAKA_DISABLE_EXEC_GpuCuda)
-    std::cout << "\n--- Using OpenMP backend ---\n" << std::endl;
-#else
-    std::cout << "\n--- Using CUDA backend ---\n" << std::endl;
-#endif
-
-    return run();
+    return onHost::executeForEachIfHasDevice(
+        [](auto const& backend) { return run(backend[alpaka::object::deviceSpec], backend[alpaka::object::exec]); },
+        onHost::allBackends(onHost::enabledApis, exec::enabledExecutors));
 }
