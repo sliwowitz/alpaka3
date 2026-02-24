@@ -33,19 +33,25 @@ if(BACKEND STREQUAL "OPENMP")
 endif()
 target_link_libraries(matrixAdd PUBLIC alpaka::alpaka)
 
-# matMul (only include working executables)
+# matMul
 add_executable(matMul src/matMul.cpp)
 if(BACKEND STREQUAL "OPENMP")
     target_compile_definitions(matMul PRIVATE ALPAKA_DISABLE_EXEC_GpuCuda)
 endif()
 target_link_libraries(matMul PUBLIC alpaka::alpaka)
 
-# Note: matMulOpt excluded due to compilation errors with current alpaka API
+# matMulOpt (optimized matrix multiplication - copied from vibe)
+add_executable(matMulOpt src/matMulOpt.cpp)
+if(BACKEND STREQUAL "OPENMP")
+    target_compile_definitions(matMulOpt PRIVATE ALPAKA_DISABLE_EXEC_GpuCuda)
+endif()
+target_link_libraries(matMulOpt PUBLIC alpaka::alpaka)
 
 include(${CMAKE_BINARY_DIR}/alpaka/cmake/alpakaCommon.cmake OPTIONAL)
 alpaka_finalize(vectorAdd10M)
 alpaka_finalize(matrixAdd)
 alpaka_finalize(matMul)
+alpaka_finalize(matMulOpt)
 
 if(BACKEND STREQUAL "CUDA")
     set_target_properties(vectorAdd10M PROPERTIES CUDA_ARCHITECTURES "86")
