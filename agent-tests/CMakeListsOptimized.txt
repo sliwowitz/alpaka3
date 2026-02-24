@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.25)
+
+project(agentTestsOptimized LANGUAGES CXX)
+
+# Use alpaka source tree for proper backend configuration
+option(alpaka_USE_SOURCE_TREE "Use alpaka's source tree instead of an alpaka installation" ON)
+
+if(alpaka_USE_SOURCE_TREE)
+    set(alpaka_BUILD_EXAMPLES OFF)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_BINARY_DIR}/alpaka")
+else()
+    find_package(alpaka REQUIRED)
+endif()
+
+# Optimized matrix multiplication executable
+add_executable(matrixMulOptimized matrixMulOptimized.cpp)
+target_link_libraries(matrixMulOptimized PUBLIC alpaka::alpaka)
+alpaka_finalize(matrixMulOptimized)

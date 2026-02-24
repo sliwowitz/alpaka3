@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.25)
+project(WorkingVectorAddTest)
+
+# Find alpaka package
+find_package(alpaka REQUIRED)
+
+# Add executable
+add_executable(workingVectorAdd workingVectorAdd.cpp)
+
+# Set C++20 standard
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Link with alpaka first
+target_link_libraries(workingVectorAdd PRIVATE alpaka::alpaka)
+
+# Finalize alpaka target
+alpaka_finalize(workingVectorAdd)
+
+# Enable OpenMP
+find_package(OpenMP REQUIRED)
+target_link_libraries(workingVectorAdd PRIVATE OpenMP::OpenMP_CXX)
+
+# Enable CUDA if available
+find_package(CUDAToolkit)
+if(CUDAToolkit_FOUND)
+    enable_language(CUDA)
+    target_link_libraries(workingVectorAdd PRIVATE cuda)
+endif()

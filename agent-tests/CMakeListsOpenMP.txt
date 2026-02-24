@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.25)
+project(SimpleOpenMPVectorAddTest)
+
+# Find alpaka package
+find_package(alpaka REQUIRED)
+
+# Add executable
+add_executable(simpleOpenMPVectorAdd simpleOpenMPVectorAdd.cpp)
+
+# Set C++20 standard
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Link with alpaka
+target_link_libraries(simpleOpenMPVectorAdd PRIVATE alpaka::alpaka)
+
+# Finalize alpaka target
+alpaka_finalize(simpleOpenMPVectorAdd)
+
+# Enable OpenMP
+find_package(OpenMP REQUIRED)
+target_link_libraries(simpleOpenMPVectorAdd PRIVATE OpenMP::OpenMP_CXX)
