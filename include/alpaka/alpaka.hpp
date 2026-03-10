@@ -23,6 +23,7 @@
 #include "alpaka/core/common.hpp"
 #include "alpaka/core/config.hpp"
 #include "alpaka/executor.hpp"
+#include "alpaka/fn.hpp"
 #include "alpaka/interface.hpp"
 #include "alpaka/internal/interface.hpp"
 #include "alpaka/intrinsic.hpp"
