@@ -113,9 +113,9 @@ namespace alpaka::onHost
             auto const& f,
             auto&&... args) const
         {
-            return internal::enqueue(
+            internal::enqueue(
                 *m_queue.get(),
-                std::move(executor),
+                executor,
                 domainSpec,
                 KernelBundle{f, onHost::makeAccessibleOnAcc(ALPAKA_FORWARD(args))...});
         }
@@ -132,10 +132,10 @@ namespace alpaka::onHost
          */
         void enqueue(onHost::concepts::ThreadOrFrameSpec auto const& domainSpec, auto const& f, auto&&... args) const
         {
-            auto executor = supportedExecutors(internal::getDevice(*m_queue.get()), exec::allExecutors);
-            return internal::enqueue(
+            auto executors = supportedExecutors(internal::getDevice(*m_queue.get()), exec::allExecutors);
+            internal::enqueue(
                 *m_queue.get(),
-                std::get<0>(executor),
+                std::get<0>(executors),
                 domainSpec,
                 KernelBundle{f, onHost::makeAccessibleOnAcc(ALPAKA_FORWARD(args))...});
         }
@@ -154,8 +154,8 @@ namespace alpaka::onHost
             onHost::concepts::ThreadOrFrameSpec auto const& domainSpec,
             KernelBundle<TKernelFn, TArgs...> const& kernelBundle) const
         {
-            auto executor = supportedExecutors(internal::getDevice(*m_queue.get()), exec::allExecutors);
-            internal::enqueue(*m_queue.get(), std::get<0>(executor), domainSpec, kernelBundle);
+            auto executors = supportedExecutors(internal::getDevice(*m_queue.get()), exec::allExecutors);
+            internal::enqueue(*m_queue.get(), std::get<0>(executors), domainSpec, kernelBundle);
         }
 
         /** Enqueue a kernel functor to a queue.
@@ -184,9 +184,7 @@ namespace alpaka::onHost
          */
         void enqueueHostFn(auto const& task) const
         {
-            return internal::Enqueue::HostTask<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(task)>{}(
-                *m_queue.get(),
-                task);
+            internal::Enqueue::HostTask<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(task)>{}(*m_queue.get(), task);
         }
 
         /** Enqueue an operation which is executed asynchronously on the host side
@@ -199,7 +197,7 @@ namespace alpaka::onHost
          */
         void enqueueHostFnDeferred(auto const& task) const
         {
-            return internal::Enqueue::HostTaskDeferred<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(task)>{}(
+            internal::Enqueue::HostTaskDeferred<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(task)>{}(
                 *m_queue.get(),
                 task);
         }
@@ -212,7 +210,7 @@ namespace alpaka::onHost
          */
         void enqueue(Event<Device<T_Api, T_DeviceKind>> const& event) const
         {
-            return internal::Enqueue::Event<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(*event.get())>{}(
+            internal::Enqueue::Event<ALPAKA_TYPEOF(*m_queue.get()), ALPAKA_TYPEOF(*event.get())>{}(
                 *m_queue.get(),
                 *event.get());
         }
@@ -223,7 +221,7 @@ namespace alpaka::onHost
          */
         void waitFor(Event<Device<T_Api, T_DeviceKind>> const& event) const
         {
-            return internal::waitFor(*m_queue.get(), *event.get());
+            internal::waitFor(*m_queue.get(), *event.get());
         }
     };
 
