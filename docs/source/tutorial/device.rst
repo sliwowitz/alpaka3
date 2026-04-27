@@ -17,7 +17,7 @@ Which ``api`` is available depends on the CMake flags ``alpaka_DEP_*`` or, if yo
 Here we will show how to select a ``host`` device, which is always available and represents your CPU.
 If you use a combination that is not supported because the required dependency is not loaded, or because it is an invalid ``api`` and ``deviceKind`` combination, you will see a compiler error.
 
-  .. literalinclude:: ../../snippets/example/05_device.cpp
+  .. literalinclude:: ../../snippets/example/020_device.cpp
     :language: cpp
     :start-after: BEGIN-TUTORIAL-devSelect
     :end-before: END-TUTORIAL-devSelect
@@ -26,7 +26,7 @@ If you use a combination that is not supported because the required dependency i
 We create an object that can allocate a device of the given device kind for us, but first we need to check if there is a device available.
 Maybe there is no device available due to driver issues.
 
-  .. literalinclude:: ../../snippets/example/05_device.cpp
+  .. literalinclude:: ../../snippets/example/020_device.cpp
     :language: cpp
     :start-after: BEGIN-TUTORIAL-devCount
     :end-before: END-TUTORIAL-devCount
@@ -34,7 +34,7 @@ Maybe there is no device available due to driver issues.
 
 Before we take a device let's check the device properties e.g. the name and warp size.
 
-  .. literalinclude:: ../../snippets/example/05_device.cpp
+  .. literalinclude:: ../../snippets/example/020_device.cpp
     :language: cpp
     :start-after: BEGIN-TUTORIAL-devProperties
     :end-before: END-TUTORIAL-devProperties
@@ -42,7 +42,7 @@ Before we take a device let's check the device properties e.g. the name and warp
 
 Calling ``makeDevice()`` using the device index to obtain the device only succeeds if the device is available, else you will get a runtime exception.
 
-  .. literalinclude:: ../../snippets/example/05_device.cpp
+  .. literalinclude:: ../../snippets/example/020_device.cpp
     :language: cpp
     :start-after: BEGIN-TUTORIAL-devHandleCount
     :end-before: END-TUTORIAL-devHandleCount
@@ -50,8 +50,25 @@ Calling ``makeDevice()`` using the device index to obtain the device only succee
 
 The device with the api ``host`` and the device kind ``cpu`` which represents your host system CPU is always available, therefore you have a shortcut interface function available.
 
-  .. literalinclude:: ../../snippets/example/05_device.cpp
+  .. literalinclude:: ../../snippets/example/020_device.cpp
     :language: cpp
     :start-after: BEGIN-TUTORIAL-devHostDev
     :end-before: END-TUTORIAL-devHostDev
     :dedent:
+
+Complete Source File
+--------------------
+
+.. raw:: html
+
+   <details class="full-source">
+   <summary>020_device.cpp</summary>
+
+.. filteredliteralinclude:: ../../snippets/example/020_device.cpp
+   :language: cpp
+   :linenos:
+
+.. raw:: html
+
+   </details>
+   <br/>
