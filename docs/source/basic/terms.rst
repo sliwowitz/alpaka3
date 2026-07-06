@@ -1,7 +1,7 @@
 Terms & Structure
 =================
 
-.. sectionauthor:: Simeon Ehrig, René Widera
+.. sectionauthor:: Simeon Ehrig, René Widera, Tim Hanel
 
 
 Host and Accelerator
@@ -220,6 +220,13 @@ Kernel
 
 Executor
 --------
+
+.. _backend:
+
+Backend
+-------
+
+A ``Backend`` the combination of a ``DeviceSpec`` and an ``Executor``. It is typically returned by ``onHost::allBackends(...)``.
 
 .. _thread_spec:
 
