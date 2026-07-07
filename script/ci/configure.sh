@@ -40,16 +40,17 @@ if [[ "$compiler_name" == "gcc" || "$compiler_name" == "clang" || "$compiler_nam
     )
 
     declare -A ap_deps=(
-        ["alpaka_DEP_OMP"]=OFF
-        ["alpaka_DEP_HWLOC"]=OFF
-        ["alpaka_DEP_CUDA"]=OFF
-        ["alpaka_DEP_HIP"]=OFF
-        ["alpaka_DEP_ONEAPI"]=OFF
+        ["OMP"]=OFF
+        ["HWLOC"]=OFF
+        ["TBB"]=OFF
+        ["CUDA"]=OFF
+        ["HIP"]=OFF
+        ["ONEAPI"]=OFF
     )
 
     # if no GPU SDK is used
     if [[ ("$APCI_HIP" == 0) && ("$compiler_name" == "gcc" || "$compiler_name" == "clang") ]]; then
-        ap_deps['alpaka_DEP_OMP']=ON
+        ap_deps['OMP']=ON
     fi
 
     if [[ "$APCI_HIP" != 0 ]]; then
@@ -59,7 +60,7 @@ if [[ "$compiler_name" == "gcc" || "$compiler_name" == "clang" || "$compiler_nam
         export PATH=${ROCM_PATH}/llvm/bin:$PATH
         export CMAKE_PREFIX_PATH=$ROCM_PATH:$CMAKE_PREFIX_PATH
 
-        ap_deps['alpaka_DEP_HIP']=ON
+        ap_deps['HIP']=ON
 
         if [[ -n ${APCI_AMD_GPU_ARCH+x} ]]; then
             CMAKE_ARGS+=(
@@ -74,9 +75,7 @@ if [[ "$compiler_name" == "gcc" || "$compiler_name" == "clang" || "$compiler_nam
         # shellcheck source=script/ci/install/oneapi/setvars.sh
         source "${APCI_ALPAKA_ROOT}/script/ci/install/oneapi/setvars.sh"
 
-        ap_deps['alpaka_DEP_ONEAPI']=ON
-
-        CMAKE_ARGS+=(-Dalpaka_EXEC_CpuSerial=OFF)
+        ap_deps['ONEAPI']=ON
 
         declare -A ap_sycl_targets=(
             ["alpaka_ONEAPI_Cpu"]=OFF
@@ -103,9 +102,20 @@ if [[ "$compiler_name" == "gcc" || "$compiler_name" == "clang" || "$compiler_nam
         done
     fi
 
+    # enable dependencies
     for dep in "${!ap_deps[@]}"; do
-        CMAKE_ARGS+=("-D${dep}=${ap_deps[$dep]}")
+        CMAKE_ARGS+=("-Dalpaka_DEP_${dep}=${ap_deps[$dep]}")
     done
+
+    # enable executor
+    CMAKE_ARGS+=(
+        -Dalpaka_EXEC_CpuSerial="${APCI_EXEC_CPU_SERIAL}"
+        -Dalpaka_EXEC_CpuOmpBlocks=ON
+        -Dalpaka_EXEC_TbbBlocks=ON
+        -Dalpaka_EXEC_GpuCuda=ON
+        -Dalpaka_EXEC_GpuHip=ON
+        -Dalpaka_EXEC_OneApi=ON
+    )
 
     echo_green "$(echo_if_not_empty LD_LIBRARY_PATH)" \
         "${APCI_CMAKE_BIN_PATH}/cmake" \
