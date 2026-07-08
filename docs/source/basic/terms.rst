@@ -221,12 +221,15 @@ Kernel
 Executor
 --------
 
+The ``executor``, which describes how thread parallelism is mapped onto the device according to the device specification.
+
 .. _backend:
 
-Backend
--------
+Backend Spec
+------------
 
-A ``Backend`` is the combination of a ``DeviceSpec`` and an ``Executor``. It is typically returned by ``onHost::allBackends(...)``.
+A ``BackendSpec`` (backend specification) provides two properties:
+The :ref:`DeviceSpec <device_kind>` and the :ref:`executor`, it is typically returned by ``onHost::allBackends(...)``.
 
 .. _thread_spec:
 
