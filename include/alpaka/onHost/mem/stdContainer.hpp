@@ -30,6 +30,17 @@ namespace alpaka
             }
         };
 
+        /** A span names memory it does not own. Host code spans host memory. */
+        template<typename T_Type, size_t T_size>
+        struct GetApi::Op<std::span<T_Type, T_size>>
+        {
+            inline constexpr auto operator()(auto&& stdSpan) const
+            {
+                alpaka::unused(stdSpan);
+                return api::Host{};
+            }
+        };
+
         /** The Api is the Api of the caller scope */
         template<typename T_Type, size_t T_size>
         struct GetApi::Op<std::array<T_Type, T_size>>
