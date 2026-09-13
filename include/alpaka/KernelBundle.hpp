@@ -112,7 +112,7 @@ namespace alpaka
                 std::remove_const_t<KernelFn>,
                 TAcc,
                 remove_restrict_t<ALPAKA_TYPEOF(onHost::makeAccessibleOnAcc(std::declval<TArgs>()))>...>)
-        constexpr auto operator()(TAcc const& acc) const
+        ALPAKA_FN_INLINE constexpr auto operator()(TAcc const& acc) const
         {
             static_assert(
                 std::is_invocable_v<
