@@ -88,6 +88,29 @@
 #    define ALPAKA_FN_INLINE [[gnu::always_inline]] inline
 #endif
 
+//! Macro defining the call operator of a lambda as constexpr and always inline.
+//!
+//! ALPAKA_FN_INLINE cannot mark a lambda: it contains the keyword 'inline', which a lambda does not take.
+//! This macro stays between the parameter list and the body of the lambda, in place of 'constexpr'.
+//! It states 'constexpr' and the always_inline attribute in the order that the compiler accepts:
+//! nvcc and gcc take the attribute only after 'constexpr', clang only before it.
+//! nvcc is tested first, because nvcc with a clang host compiler defines __clang__ as well.
+//!
+//! \code{.cpp}
+//! Usage:
+//! [&](auto const&... args) ALPAKA_LAMBDA_INLINE_CONSTEXPR { f(args...); }
+//! \endcode
+#if ALPAKA_COMP_NVCC
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR constexpr __attribute__((always_inline))
+#elif ALPAKA_COMP_CLANG
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR __attribute__((always_inline)) constexpr
+#elif ALPAKA_COMP_MSVC
+// MSVC does not take a GNU attribute.
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR constexpr
+#else
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR constexpr __attribute__((always_inline))
+#endif
+
 //! This macro defines a variable lying in global accelerator device memory.
 //!
 //! Example:
