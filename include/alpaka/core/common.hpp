@@ -112,6 +112,15 @@
 #    define ALPAKA_FN_INLINE [[gnu::always_inline]] inline
 #endif
 
+//! ALPAKA_FN_INLINE for a lambda: clang takes the attribute before constexpr, gcc and nvcc after it.
+#if ALPAKA_COMP_CLANG && !ALPAKA_COMP_NVCC
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR __attribute__((always_inline)) constexpr
+#elif ALPAKA_COMP_MSVC
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR constexpr
+#else
+#    define ALPAKA_LAMBDA_INLINE_CONSTEXPR constexpr __attribute__((always_inline))
+#endif
+
 //! This macro defines a variable lying in global accelerator device memory.
 //!
 //! Example:
