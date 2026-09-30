@@ -385,7 +385,8 @@ namespace alpaka::onHost::internal
         alpaka::concepts::IMdSpan auto&& outputVec,
         alpaka::concepts::IDataSource auto& inputVec)
     {
-        using Data = typename ALPAKA_TYPEOF(inputVec)::value_type;
+        // The input can be const; the scan writes values of the element type itself.
+        using Data = std::remove_const_t<typename ALPAKA_TYPEOF(inputVec)::value_type>;
         using Idx = typename ALPAKA_TYPEOF(inputVec)::index_type;
 
         static_assert(
@@ -459,7 +460,7 @@ namespace alpaka::onHost::internal
         alpaka::concepts::IMdSpan auto&& outputVec,
         alpaka::concepts::IDataSource auto const& inputVec)
     {
-        using Data = ALPAKA_TYPEOF(inputVec)::value_type;
+        using Data = std::remove_const_t<typename ALPAKA_TYPEOF(inputVec)::value_type>;
 
         /* We do not use allocDeferred here since we measured up to a factor 40 higher latency compared to alloc for
          * CUDA 12.8 on an A30 for the first call. The reason is the cuda per stream caching pool setup time.
