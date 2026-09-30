@@ -74,6 +74,16 @@ namespace alpaka::onAcc
             struct Op;
         };
 
+        /** Implements an atomic operation on the memory a block shares.
+         *
+         * An implementation that has no specialization for an operation takes the operation of Block scope.
+         */
+        struct SharedAtomic
+        {
+            template<typename T_Op, typename T_AtomicImpl, typename T>
+            struct Op;
+        };
+
         /** Get the index of an object within a layer in the selected units*/
         struct GetIdxWithin
         {
