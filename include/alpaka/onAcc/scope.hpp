@@ -51,6 +51,23 @@ namespace alpaka::onAcc
         constexpr Block block{};
 
         /**
+         * @brief Block scope for an address in the memory the block shares.
+         *
+         * The address comes from declareSharedVar, declareSharedMdArray or the dynamic shared memory of the block.
+         * An atomic of this scope can take the instruction of that memory, which does not resolve a generic address
+         * on every access. Every other use behaves as Block.
+         */
+        struct BlockShared : ScopeTag
+        {
+            static std::string getName()
+            {
+                return "BlockShared";
+            }
+        };
+
+        constexpr BlockShared blockShared{};
+
+        /**
          * @brief Scope for atomic and fence operations visible across all thread blocks on the same device.
          *
          * When used with atomic operations, all threads on the same device will see the updated value.
