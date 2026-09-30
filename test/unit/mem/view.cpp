@@ -95,6 +95,10 @@ TEMPLATE_LIST_TEST_CASE("makeView factories", "[mem][view]", DeviceSpecs)
 
         std::span<int> span{input};
         concepts::IView auto view = makeView(getApi(host), span);
+        // A named API constant is an lvalue; the factory takes it as well.
+        concepts::IView auto named = makeView(api::host, span);
+        STATIC_REQUIRE(std::same_as<ALPAKA_TYPEOF(getApi(named)), ALPAKA_TYPEOF(getApi(view))>);
+        REQUIRE(named.data() == view.data());
 
         concepts::Vector auto spanExtents = Vec{input.size()};
         auto deviceBuffer = onHost::alloc<int>(device, spanExtents);

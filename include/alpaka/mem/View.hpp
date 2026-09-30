@@ -72,10 +72,10 @@ namespace alpaka
      * Data, extents, pitches, and alignment are obtained from @p any. The view
      * refers to the same data and does not own the data. The @p api is derived from @p anyWithApi.
      */
-    inline constexpr auto makeView(alpaka::concepts::Api auto&& anyWithApi, auto&& any)
+    inline constexpr auto makeView(alpaka::concepts::Api auto const& anyWithApi, auto&& any)
     {
         return View{
-            internal::getApi(ALPAKA_FORWARD(anyWithApi)),
+            internal::getApi(anyWithApi),
             onHost::data(ALPAKA_FORWARD(any)),
             onHost::getExtents(ALPAKA_FORWARD(any)),
             onHost::getPitches(ALPAKA_FORWARD(any)),
