@@ -310,6 +310,10 @@ namespace alpaka::onAcc::internalCompute
      *
      * A generic address makes the device find the memory it lies in on every access. The shared address is taken
      * once, and the add is the instruction of the shared memory.
+     *
+     * Clang states the add as an ordinary relaxed atomic at block scope on a pointer into the shared address space.
+     * The optimizer then sees the add for what it is: it drops a result nobody reads, keeps the base of a shared
+     * array in one register, and moves loads across the add. Inline assembly hides all three.
      */
     template<typename T>
     requires(
@@ -319,6 +323,10 @@ namespace alpaka::onAcc::internalCompute
     {
         static __device__ auto atomicOp(internal::CudaHipAtomic const, T* const addr, T const& value) -> T
         {
+#        if ALPAKA_COMP_CLANG_CUDA
+            auto* const shared = (__attribute__((address_space(3))) T*) (addr);
+            return __scoped_atomic_fetch_add(shared, value, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
+#        else
             auto const shared = static_cast<std::uint32_t>(__cvta_generic_to_shared(addr));
             T old;
             if constexpr(std::same_as<T, float>)
@@ -332,6 +340,7 @@ namespace alpaka::onAcc::internalCompute
             else
                 asm volatile("atom.shared.add.u64 %0, [%1], %2;" : "=l"(old) : "r"(shared), "l"(value) : "memory");
             return old;
+#        endif
         }
     };
 #    endif
