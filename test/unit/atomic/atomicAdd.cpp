@@ -32,6 +32,23 @@ struct AtomicIncrementKernel
     }
 };
 
+/** The same increment, with the executor in place of the accelerator: code without the accelerator at hand
+ * names the executor it runs on.
+ */
+struct AtomicIncrementByExecutorKernel
+{
+    template<typename TAcc, typename TCounter>
+    ALPAKA_FN_ACC void operator()(TAcc const& acc, TCounter counter, auto repetitions) const
+    {
+        auto const executor = acc[object::exec];
+        for(auto const& idx : onAcc::makeIdxMap(acc, onAcc::worker::threadsInGrid, IdxRange{repetitions}))
+        {
+            alpaka::unused(idx);
+            alpaka::onAcc::atomicAdd(executor, &(counter[Vec{0u}]), 1u);
+        }
+    }
+};
+
 TEMPLATE_LIST_TEST_CASE("cpu atomic add increments", "[executor][atomic]", TestApis)
 {
     /** Launch each enabled host executor and ensure the atomic increment succeeds on the device counter.
@@ -53,6 +70,15 @@ TEMPLATE_LIST_TEST_CASE("cpu atomic add increments", "[executor][atomic]", TestA
     constexpr Vec threads = Vec{1u};
 
     queue.enqueue(onHost::FrameSpec{blocks, threads, exec}, KernelBundle{AtomicIncrementKernel{}, counterDev, blocks});
+    onHost::memcpy(queue, counterHost, counterDev);
+    onHost::wait(queue);
+
+    REQUIRE(counterHost[0] == blocks.x());
+
+    onHost::memset(queue, counterDev, 0);
+    queue.enqueue(
+        onHost::FrameSpec{blocks, threads, exec},
+        KernelBundle{AtomicIncrementByExecutorKernel{}, counterDev, blocks});
     onHost::memcpy(queue, counterHost, counterDev);
     onHost::wait(queue);
 
