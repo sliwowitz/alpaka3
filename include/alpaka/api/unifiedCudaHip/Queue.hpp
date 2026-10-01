@@ -335,28 +335,12 @@ namespace alpaka::onHost
                 constexpr uint32_t layerDim = dim >= 4u ? 1u : dim;
                 using IdxType = typename T_NumBlocks::value_type;
 
-                Vec<IdxType, layerDim> numBlocks;
-                Vec<IdxType, layerDim> numThreadsPerBlock;
-
-                if constexpr(dim >= 4u)
-                {
-                    numBlocks = threadSpec.getNumBlocks().product();
-                    numThreadsPerBlock = threadSpec.getNumThreads().product();
-                }
-                else
-                {
-                    numBlocks = threadSpec.getNumBlocks();
-                    numThreadsPerBlock = threadSpec.getNumThreads();
-                }
-
                 using ThreadSpecType = std::conditional_t<
                     dim >= 4u,
                     ALPAKA_TYPEOF(threadSpec),
                     OptimizedThreadSpec<
                         typename ALPAKA_TYPEOF(threadSpec)::NumBlocksVecType,
                         typename ALPAKA_TYPEOF(threadSpec)::NumThreadsVecType>>;
-                // thread spec which is only holding data if the dimension is larger than 3u
-                auto optimizedThreadSpec = ThreadSpecType(threadSpec.getNumBlocks(), threadSpec.getNumThreads());
 
                 auto kernelName = gpuKernel<
                     ALPAKA_TYPEOF(getApi(queue)),
@@ -364,8 +348,43 @@ namespace alpaka::onHost
                     T_Executor,
                     launchedWidthFrameSpec,
                     T_KernelBundle,
-                    ALPAKA_TYPEOF(optimizedThreadSpec)>;
+                    ThreadSpecType>;
 
+                /* The threads of a block share the registers of the block. A kernel that needs many registers can
+                 * therefore not run in a block of every size, and a launch above the limit of the kernel fails. A
+                 * frame can be traversed by fewer threads than it has elements, so a launch with a frame
+                 * specification stays within the limit of its kernel. A thread count that is a compile-time
+                 * constant is a part of the type of the kernel, and it stays as it is stated.
+                 */
+                auto numThreads = threadSpec.getNumThreads();
+                if constexpr(launchedWidthFrameSpec && !alpaka::concepts::CVector<T_NumThreads>)
+                {
+                    typename ApiInterface::FuncAttributes_t attributes;
+                    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
+                        ApiInterface,
+                        ApiInterface::funcGetAttributes(&attributes, kernelName));
+                    if(attributes.maxThreadsPerBlock > 0)
+                        numThreads = api::util::adjustToLimit(numThreads, attributes.maxThreadsPerBlock);
+                }
+
+                Vec<IdxType, layerDim> numBlocks;
+                Vec<IdxType, layerDim> numThreadsPerBlock;
+
+                if constexpr(dim >= 4u)
+                {
+                    numBlocks = threadSpec.getNumBlocks().product();
+                    numThreadsPerBlock = numThreads.product();
+                }
+                else
+                {
+                    numBlocks = threadSpec.getNumBlocks();
+                    numThreadsPerBlock = numThreads;
+                }
+
+                // thread spec which is only holding data if the dimension is larger than 3u
+                auto optimizedThreadSpec = ThreadSpecType(threadSpec.getNumBlocks(), numThreads);
+
+                // The size is that of the stated specification, so a block with fewer threads has no less memory.
                 uint32_t blockDynSharedMemBytes = onHost::getDynSharedMemBytes(threadSpec, kernelBundle);
 
                 kernelName<<<
