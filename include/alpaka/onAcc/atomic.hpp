@@ -30,6 +30,10 @@ namespace alpaka::onAcc
             else
                 return accOrExecutor[object::exec];
         }
+
+        /// The scope an implementation is chosen for: memory a block shares is chosen as Block.
+        template<typename T_Scope>
+        using VisibleScope = std::conditional_t<std::same_as<T_Scope, scope::BlockShared>, scope::Block, T_Scope>;
     } // namespace detail
 
     //! Executes the given operation atomically.
@@ -43,11 +47,16 @@ namespace alpaka::onAcc
     constexpr auto atomicOp(auto const& acc, T* const addr, T const& value, T_Scope const scope = T_Scope()) -> T
     {
         static_assert(!std::is_same_v<T_Scope, scope::System>, "System scope is currently not supported.");
-        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), scope);
-        return internalCompute::Atomic::Op<T_Op, ALPAKA_TYPEOF(atomicImpl), T, T_Scope>::atomicOp(
-            atomicImpl,
-            addr,
-            value);
+        alpaka::unused(scope);
+        using Visible = detail::VisibleScope<T_Scope>;
+        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), Visible{});
+        using Impl = ALPAKA_TYPEOF(atomicImpl);
+        if constexpr(std::same_as<T_Scope, scope::BlockShared> && requires {
+                         internalCompute::SharedAtomic::Op<T_Op, Impl, T>{};
+                     })
+            return internalCompute::SharedAtomic::Op<T_Op, Impl, T>::atomicOp(atomicImpl, addr, value);
+        else
+            return internalCompute::Atomic::Op<T_Op, Impl, T, Visible>::atomicOp(atomicImpl, addr, value);
     }
 
     //! Executes the given operation atomically.
@@ -66,8 +75,10 @@ namespace alpaka::onAcc
         T_Scope const scope = T_Scope()) -> T
     {
         static_assert(!std::is_same_v<T_Scope, scope::System>, "System scope is currently not supported.");
-        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), scope);
-        return internalCompute::Atomic::Op<T_Op, ALPAKA_TYPEOF(atomicImpl), T, T_Scope>::atomicOp(
+        alpaka::unused(scope);
+        using Visible = detail::VisibleScope<T_Scope>;
+        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), Visible{});
+        return internalCompute::Atomic::Op<T_Op, ALPAKA_TYPEOF(atomicImpl), T, Visible>::atomicOp(
             atomicImpl,
             addr,
             compare,
