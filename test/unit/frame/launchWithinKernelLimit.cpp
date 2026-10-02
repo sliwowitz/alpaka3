@@ -79,20 +79,26 @@ TEMPLATE_LIST_TEST_CASE("frame launch within the thread limit of the kernel", ""
     concepts::Executor auto exec = test::getExecutor(deviceExec);
     onHost::Queue queue = device.makeQueue();
 
-    // The frame extent that the algorithms of the library take on a GPU.
-    Vec const frameExtents{512u};
-    Vec const extents{8u * frameExtents.x()};
+    Vec const extents{8u * 1024u};
     constexpr uint32_t rounds = 4u;
 
     auto dBuff = onHost::alloc<float>(device, extents);
     auto hBuff = onHost::allocHostLike(dBuff);
 
-    queue.enqueue(
-        onHost::FrameSpec{divExZero(extents, frameExtents), frameExtents, exec},
-        KernelBundle{ManyLiveValuesKernel{}, dBuff, extents, rounds});
-    onHost::memcpy(queue, hBuff, dBuff);
-    onHost::wait(queue);
+    /* The first extent is the one that the algorithms of the library take on a GPU. The limit of a kernel serves
+     * every launch of that kernel, so launches with other frame extents follow the first one.
+     */
+    for(uint32_t const frameElements : {512u, 1024u, 256u})
+    {
+        Vec const frameExtents{frameElements};
+        onHost::fill(queue, dBuff, -1.0f);
+        queue.enqueue(
+            onHost::FrameSpec{divExZero(extents, frameExtents), frameExtents, exec},
+            KernelBundle{ManyLiveValuesKernel{}, dBuff, extents, rounds});
+        onHost::memcpy(queue, hBuff, dBuff);
+        onHost::wait(queue);
 
-    for(uint32_t i = 0u; i < extents.x(); ++i)
-        CHECK(hBuff[Vec{i}] == ManyLiveValuesKernel::expected(i));
+        for(uint32_t i = 0u; i < extents.x(); ++i)
+            CHECK(hBuff[Vec{i}] == ManyLiveValuesKernel::expected(i));
+    }
 }
