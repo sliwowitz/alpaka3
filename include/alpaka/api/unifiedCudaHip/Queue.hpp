@@ -32,6 +32,8 @@
 
 #    include "alpaka/core/ApiCudaRt.hpp"
 
+#    include <array>
+#    include <atomic>
 #    include <cstdint>
 #    include <sstream>
 
@@ -355,16 +357,31 @@ namespace alpaka::onHost
                  * frame can be traversed by fewer threads than it has elements, so a launch with a frame
                  * specification stays within the limit of its kernel. A thread count that is a compile-time
                  * constant is a part of the type of the kernel, and it stays as it is stated.
+                 *
+                 * The limit belongs to the kernel function on one device, and this call operator is one function
+                 * for each kernel. So one query serves every launch of the kernel on that device. The table has a
+                 * slot for each device index below its size, and zero says that the kernel was not asked there. A
+                 * device beyond the table is asked at every launch.
                  */
                 auto numThreads = threadSpec.getNumThreads();
                 if constexpr(launchedWidthFrameSpec && !alpaka::concepts::CVector<T_NumThreads>)
                 {
-                    typename ApiInterface::FuncAttributes_t attributes;
-                    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
-                        ApiInterface,
-                        ApiInterface::funcGetAttributes(&attributes, kernelName));
-                    if(attributes.maxThreadsPerBlock > 0)
-                        numThreads = api::util::adjustToLimit(numThreads, attributes.maxThreadsPerBlock);
+                    static std::array<std::atomic<int>, 16> limitOnDevice{};
+                    auto const device = static_cast<std::size_t>(onHost::getNativeHandle(queue.m_device));
+                    int maxThreadsPerBlock
+                        = device < limitOnDevice.size() ? limitOnDevice[device].load(std::memory_order_relaxed) : 0;
+                    if(maxThreadsPerBlock == 0)
+                    {
+                        typename ApiInterface::FuncAttributes_t attributes;
+                        ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
+                            ApiInterface,
+                            ApiInterface::funcGetAttributes(&attributes, kernelName));
+                        maxThreadsPerBlock = attributes.maxThreadsPerBlock;
+                        if(device < limitOnDevice.size())
+                            limitOnDevice[device].store(maxThreadsPerBlock, std::memory_order_relaxed);
+                    }
+                    if(maxThreadsPerBlock > 0)
+                        numThreads = api::util::adjustToLimit(numThreads, maxThreadsPerBlock);
                 }
 
                 Vec<IdxType, layerDim> numBlocks;
