@@ -8,28 +8,39 @@
 #include "alpaka/utility.hpp"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace alpaka::onHost::internal
 {
 
-    /** SIMD  width in bytes defined by std::simd
+    /** The width in bytes of the native SIMD register that std::simd knows, or 0 without std::simd.
+     *
+     * The width is a fact of the architecture and not of the element type, so one element type asks for it: a
+     * 32-bit one, whose vector type every standard library forms in a moment. The vector type of a 64-bit element
+     * is what clang 22 instantiates for minutes in the device pass of a CUDA translation unit, through libstdc++
+     * 15's experimental simd, so no 64-bit element type reaches std::simd from here.
+     */
+    constexpr size_t stdSimdRegisterBytes()
+    {
+#if ALPAKA_HAS_STD_SIMD
+        return alpakaStdSimd::native_simd<float>::size() * sizeof(float);
+#else
+        return 0;
+#endif
+    }
+
+    /** SIMD width in bytes defined by std::simd
      *
      * @return 0 if std::simd is not supported or the T_Type is unsupported, else the SIMD width in bytes
      */
     template<typename T_Type>
     constexpr size_t stdSimdWidth()
     {
-        return 0;
+        if constexpr(std::is_arithmetic_v<T_Type> && !std::is_same_v<T_Type, bool>)
+            return stdSimdRegisterBytes();
+        else
+            return 0;
     }
-#if ALPAKA_HAS_STD_SIMD
-    template<typename T_Type>
-    requires requires { alpakaStdSimd::native_simd<T_Type>::size(); }
-    constexpr size_t stdSimdWidth()
-    {
-        return alpakaStdSimd::native_simd<T_Type>::size() * sizeof(T_Type);
-    }
-#endif
-
 
     template<typename T_Type>
     constexpr uint32_t getCPUSimdWidth()
