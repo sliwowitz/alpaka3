@@ -15,7 +15,7 @@
 #if ALPAKA_LANG_CUDA
 namespace alpaka::onAcc::warp::internal
 {
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Activemask::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Cuda) const
@@ -24,7 +24,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct GetLaneIdx::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Cuda) const
@@ -53,7 +53,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct All::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ bool operator()(T_Acc const&, api::Cuda, int32_t predicate) const
@@ -62,7 +62,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Any::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ bool operator()(T_Acc const&, api::Cuda, int32_t predicate) const
@@ -71,7 +71,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Ballot::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Cuda, int32_t predicate) const
@@ -80,7 +80,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct Shfl::Op<T_Acc, api::Cuda, T>
     {
         constexpr __device__ T
@@ -90,7 +90,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflDown::Op<T_Acc, api::Cuda, T>
     {
         constexpr __device__ T
@@ -100,7 +100,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflUp::Op<T_Acc, api::Cuda, T>
     {
         constexpr __device__ T
@@ -110,7 +110,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflXor::Op<T_Acc, api::Cuda, T>
     {
         constexpr __device__ T

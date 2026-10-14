@@ -15,35 +15,48 @@
 #pragma once
 
 #include "alpaka/Vec.hpp"
+#include "alpaka/concepts.hpp"
 #include "alpaka/interface.hpp"
 #include "alpaka/onAcc/Acc.hpp"
 #include "alpaka/onAcc/internal/warp.hpp"
 #include "alpaka/tag.hpp"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace alpaka::onAcc::warp
 {
+    /** The accelerator, or an executor.
+     *
+     * Every warp function below takes either. An executor serves on CUDA, HIP and the host, where a warp function
+     * reads nothing of the accelerator: the API comes from the compile pass (`thisApi()`), and the size of a warp
+     * from the device kind of that API. Code without an accelerator at hand, such as a function called from deep
+     * inside a kernel, passes the executor it was compiled for, as the atomics take it. oneAPI reads the sub-group
+     * from the accelerator, so there an executor is refused when the tree compiles.
+     */
+    template<typename T>
+    concept AccOrExecutor = alpaka::onAcc::concepts::Acc<T> || alpaka::concepts::Executor<T>;
+
     /** Return the bit-mask of active lanes for the warp associated with the accelerator.
      *
      * @return bit mask where the Nth bit is set to 1 if the corresponding thread is participating the call. The return
      * type can be 64bit or 32bit depending on the API.
      */
-    template<alpaka::onAcc::concepts::Acc T_Acc>
-    constexpr auto activemask(T_Acc const& acc) -> std::conditional_t<T_Acc::getWarpSize() <= 32u, uint32_t, uint64_t>
+    template<AccOrExecutor T_AccOrExecutor>
+    constexpr auto activemask(T_AccOrExecutor const& accOrExecutor)
+        -> std::conditional_t<internal::sizeOf<T_AccOrExecutor>() <= 32u, uint32_t, uint64_t>
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::Activemask::Op<Acc, Api>{}(acc, Api{});
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::Activemask::Op<T_AccOrExecutor, Api>{}(accOrExecutor, Api{});
     }
 
     /** Return the lane index of the current thread within its warp. */
-    constexpr uint32_t getLaneIdx(alpaka::onAcc::concepts::Acc auto const& acc)
+    constexpr uint32_t getLaneIdx(AccOrExecutor auto const& accOrExecutor)
     {
-        return internal::getLaneIdx(acc);
+        return internal::getLaneIdx(accOrExecutor);
     }
 
-    /** Return the warp index within the block. */
+    /** Return the warp index within the block. An accelerator alone knows the threads of its block. */
     constexpr uint32_t getWarpIdx(alpaka::onAcc::concepts::Acc auto const& acc)
     {
         return internal::getWarpIdx(acc);
@@ -61,11 +74,11 @@ namespace alpaka::onAcc::warp
      * @param predicate The predicate value for current thread.
      * @return true if all threads predicate non zero, else false
      */
-    constexpr bool all(alpaka::onAcc::concepts::Acc auto const& acc, int32_t predicate)
+    constexpr bool all(AccOrExecutor auto const& accOrExecutor, int32_t predicate)
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::All::Op<Acc, Api>{}(acc, Api{}, predicate);
+        using Acc = ALPAKA_TYPEOF(accOrExecutor);
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::All::Op<Acc, Api>{}(accOrExecutor, Api{}, predicate);
     }
 
     /** Evaluates predicate for all active threads of the warp.
@@ -80,11 +93,11 @@ namespace alpaka::onAcc::warp
      * @param predicate The predicate value for current thread.
      * @return true if at least one threads predicate is non zero, else false
      */
-    constexpr bool any(alpaka::onAcc::concepts::Acc auto const& acc, int32_t predicate)
+    constexpr bool any(AccOrExecutor auto const& accOrExecutor, int32_t predicate)
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::Any::Op<Acc, Api>{}(acc, Api{}, predicate);
+        using Acc = ALPAKA_TYPEOF(accOrExecutor);
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::Any::Op<Acc, Api>{}(accOrExecutor, Api{}, predicate);
     }
 
     /** Evaluates predicate for all non-exited threads in a warp and returns
@@ -103,31 +116,31 @@ namespace alpaka::onAcc::warp
      * @return bit mask where the Nth bit is set to 1 if the corresponding threads predicate was non zero. The return
      * type can be 64bit or 32bit depending on the API.
      */
-    template<alpaka::onAcc::concepts::Acc T_Acc>
-    constexpr auto ballot(T_Acc const& acc, int32_t predicate)
-        -> std::conditional_t<T_Acc::getWarpSize() <= 32u, uint32_t, uint64_t>
+    template<AccOrExecutor T_AccOrExecutor>
+    constexpr auto ballot(T_AccOrExecutor const& accOrExecutor, int32_t predicate)
+        -> std::conditional_t<internal::sizeOf<T_AccOrExecutor>() <= 32u, uint32_t, uint64_t>
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::Ballot::Op<Acc, Api>{}(acc, Api{}, predicate);
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::Ballot::Op<T_AccOrExecutor, Api>{}(accOrExecutor, Api{}, predicate);
     }
 
     /** Return the warp size.
      *
      * A warp is a collection of threads which work in lock step (executing the same command).
      * The warp size can be larger than the number of threads executed in the kernel/ thread block.
+     * An executor answers with the warp size of the API it is compiled for.
      * @{
      */
-    template<concepts::Acc T_Acc>
+    template<AccOrExecutor T_AccOrExecutor>
     constexpr uint32_t getSize()
     {
-        return internal::getSize<T_Acc>();
+        return internal::sizeOf<T_AccOrExecutor>();
     }
 
-    template<concepts::Acc T_Acc>
-    constexpr uint32_t getSize(T_Acc const&)
+    template<AccOrExecutor T_AccOrExecutor>
+    constexpr uint32_t getSize(T_AccOrExecutor const&)
     {
-        return T_Acc::getWarpSize();
+        return internal::sizeOf<T_AccOrExecutor>();
     }
 
     /** @} */
@@ -153,13 +166,21 @@ namespace alpaka::onAcc::warp
      * @param width number of threads receiving a single value, must be a power of 2.
      * @return val from the thread index srcLane.
      */
-    template<typename T, alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T, AccOrExecutor T_AccOrExecutor>
     requires(std::is_trivially_copyable_v<T>)
-    constexpr T shfl(T_Acc const& acc, T const& value, uint32_t srcLane, uint32_t width = getSize<T_Acc>())
+    constexpr T shfl(
+        T_AccOrExecutor const& accOrExecutor,
+        T const& value,
+        uint32_t srcLane,
+        uint32_t width = getSize<T_AccOrExecutor>())
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::Shfl::Op<Acc, Api, T>{}(acc, Api{}, value, srcLane, width != 0u ? width : getSize<T_Acc>());
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::Shfl::Op<T_AccOrExecutor, Api, T>{}(
+            accOrExecutor,
+            Api{},
+            value,
+            srcLane,
+            width != 0u ? width : getSize<T_AccOrExecutor>());
     }
 
     /** Read data from threads with higher lane index within a warp.
@@ -189,13 +210,21 @@ namespace alpaka::onAcc::warp
      * @param width size of the group participating in the shuffle operation, must be a power of 2.
      * @return the value from the thread index lane ID + delta within the group build by width, else value.
      */
-    template<typename T, alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T, AccOrExecutor T_AccOrExecutor>
     requires(std::is_trivially_copyable_v<T>)
-    constexpr T shflDown(T_Acc const& acc, T const& value, uint32_t delta, uint32_t width = getSize<T_Acc>())
+    constexpr T shflDown(
+        T_AccOrExecutor const& accOrExecutor,
+        T const& value,
+        uint32_t delta,
+        uint32_t width = getSize<T_AccOrExecutor>())
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::ShflDown::Op<Acc, Api, T>{}(acc, Api{}, value, delta, width != 0u ? width : getSize<T_Acc>());
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::ShflDown::Op<T_AccOrExecutor, Api, T>{}(
+            accOrExecutor,
+            Api{},
+            value,
+            delta,
+            width != 0u ? width : getSize<T_AccOrExecutor>());
     }
 
     /** Read data from threads with lower lane index within a warp.
@@ -224,13 +253,21 @@ namespace alpaka::onAcc::warp
      * @param width size of the group participating in the shuffle operation, must be a power of 2.
      * @return the value from the thread index lane ID + delta within the group build by width, else value.
      */
-    template<typename T, alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T, AccOrExecutor T_AccOrExecutor>
     requires(std::is_trivially_copyable_v<T>)
-    constexpr T shflUp(T_Acc const& acc, T const& value, uint32_t delta, uint32_t width = getSize<T_Acc>())
+    constexpr T shflUp(
+        T_AccOrExecutor const& accOrExecutor,
+        T const& value,
+        uint32_t delta,
+        uint32_t width = getSize<T_AccOrExecutor>())
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::ShflUp::Op<Acc, Api, T>{}(acc, Api{}, value, delta, width != 0u ? width : getSize<T_Acc>());
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::ShflUp::Op<T_AccOrExecutor, Api, T>{}(
+            accOrExecutor,
+            Api{},
+            value,
+            delta,
+            width != 0u ? width : getSize<T_AccOrExecutor>());
     }
 
     /** Exchange data between threads within a warp.
@@ -261,17 +298,20 @@ namespace alpaka::onAcc::warp
      * @param width size of the group participating in the shuffle operation, must be a power of 2.
      * @return the value from the thread index lane ID
      */
-    template<typename T, alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T, AccOrExecutor T_AccOrExecutor>
     requires(std::is_trivially_copyable_v<T>)
-    constexpr T shflXor(T_Acc const& acc, T const& value, uint32_t laneMask, uint32_t width = getSize<T_Acc>())
+    constexpr T shflXor(
+        T_AccOrExecutor const& accOrExecutor,
+        T const& value,
+        uint32_t laneMask,
+        uint32_t width = getSize<T_AccOrExecutor>())
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return internal::ShflXor::Op<Acc, Api, T>{}(
-            acc,
+        using Api = ALPAKA_TYPEOF(internal::apiOf(accOrExecutor));
+        return internal::ShflXor::Op<T_AccOrExecutor, Api, T>{}(
+            accOrExecutor,
             Api{},
             value,
             laneMask,
-            width != 0u ? width : getSize<T_Acc>());
+            width != 0u ? width : getSize<T_AccOrExecutor>());
     }
 } // namespace alpaka::onAcc::warp
