@@ -307,6 +307,7 @@ namespace alpaka
                     prop.multiProcessorCount = dev.get_info<sycl::info::device::max_compute_units>();
                     prop.globalMemCapacityBytes = dev.get_info<sycl::info::device::global_mem_size>();
                     prop.sharedMemPerBlockBytes = dev.get_info<sycl::info::device::local_mem_size>();
+                    prop.pageableHostMemoryAccess = dev.has(sycl::aspect::usm_system_allocations);
 
                     prop.maxThreadsPerBlock = dev.get_info<sycl::info::device::max_work_group_size>();
                     // will be copied into the lampda

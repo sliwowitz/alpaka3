@@ -1,0 +1,19 @@
+-- The CXX compiler identification is GNU 15.2.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/g++-15 - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Alpaka version: 3.0.0
+-- hwloc found (AUTO): 2.10.0
+-- Found OpenMP_CXX: -fopenmp (found version "4.5")
+-- Found OpenMP: TRUE (found version "4.5") found components: CXX
+-- OpenMP found: 4.5
+-- std::atomic_ref<T> found
+-- std::simd found
+-- download and install Catch2 locally
+-- Performing Test HAVE_FLAG__ffile_prefix_map__workspace_tmp_alpaka_prop_build_h__deps_catch2_src__
+-- Performing Test HAVE_FLAG__ffile_prefix_map__workspace_tmp_alpaka_prop_build_h__deps_catch2_src__ - Success
+-- Configuring done (3.7s)
+-- Generating done (0.0s)
+-- Build files have been written to: /workspace/tmp/alpaka-prop/build-h

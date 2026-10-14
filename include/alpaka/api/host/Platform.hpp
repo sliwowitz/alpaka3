@@ -146,6 +146,7 @@ namespace alpaka::onHost
                 prop.multiProcessorCount = hwloc::getNumCores(hwloc::allDomains);
                 prop.globalMemCapacityBytes = hwloc::getMemCapacityBytes(hwloc::allDomains);
                 prop.sharedMemPerBlockBytes = ALPAKA_BLOCK_SHARED_DYN_MEMBER_ALLOC_KIB * 1024u;
+                prop.pageableHostMemoryAccess = true;
 
                 if constexpr(T_DeviceKind{} == deviceKind::numaCpu)
                 {

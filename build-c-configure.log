@@ -1,0 +1,28 @@
+-- The CXX compiler identification is Clang 22.1.8
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++-22 - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Alpaka version: 3.0.0
+-- The CUDA compiler identification is Clang 22.1.8
+-- Detecting CUDA compiler ABI info
+-- Detecting CUDA compiler ABI info - done
+-- Check for working CUDA compiler: /usr/bin/clang++-22 - skipped
+-- Detecting CUDA compile features
+-- Detecting CUDA compile features - done
+-- CUDA language is available
+-- clang >= 13 detected. Force-setting OpenMP to version 4.5.
+-- cuda with host compiler: Clang
+-- hwloc found (AUTO): 2.10.0
+-- Found OpenMP_CXX: -fopenmp=libomp (found version "5.1")
+-- Found OpenMP: TRUE (found version "5.1") found components: CXX
+-- OpenMP found: 5.1
+-- std::atomic_ref<T> found
+-- std::simd found
+-- download and install Catch2 locally
+-- Performing Test HAVE_FLAG__ffile_prefix_map__workspace_tmp_alpaka_prop_build_c__deps_catch2_src__
+-- Performing Test HAVE_FLAG__ffile_prefix_map__workspace_tmp_alpaka_prop_build_c__deps_catch2_src__ - Success
+-- Configuring done (6.4s)
+-- Generating done (0.1s)
+-- Build files have been written to: /workspace/tmp/alpaka-prop/build-c
