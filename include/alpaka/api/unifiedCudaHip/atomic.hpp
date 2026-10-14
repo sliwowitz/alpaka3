@@ -13,6 +13,8 @@
 #include "alpaka/operation.hpp"
 
 #include <bit>
+#include <concepts>
+#include <cstdint>
 #include <limits>
 #include <type_traits>
 
@@ -32,9 +34,10 @@ namespace alpaka::onAcc::internalCompute
 
             template<typename T_Type>
             static __device__ auto reinterpretAddress(T_Type* address)
-                -> AtomicCasType<T_Type>* requires(sizeof(T_Type) == 4u || sizeof(T_Type) == 8u) {
-                    return reinterpret_cast<AtomicCasType<T_Type>*>(address);
-                }
+                -> AtomicCasType<T_Type>* requires(sizeof(T_Type) == 4u || sizeof(T_Type) == 8u)
+            {
+                return reinterpret_cast<AtomicCasType<T_Type>*>(address);
+            }
 
             template<typename T_Type>
             static __device__ auto reinterpretValue(T_Type value)
@@ -302,5 +305,44 @@ namespace alpaka::onAcc::internalCompute
                 value);
         }
     };
+#    if ALPAKA_LANG_CUDA
+    /** An add into the memory a block shares, with the instruction of that memory.
+     *
+     * A generic address makes the device find the memory it lies in on every access. The shared address is taken
+     * once, and the add is the instruction of the shared memory.
+     *
+     * Clang states the add as an ordinary relaxed atomic at block scope on a pointer into the shared address space.
+     * The optimizer then sees the add for what it is: it drops a result nobody reads, keeps the base of a shared
+     * array in one register, and moves loads across the add. Inline assembly hides all three.
+     */
+    template<typename T>
+    requires(
+        std::same_as<T, float> || std::same_as<T, double> || std::same_as<T, int> || std::same_as<T, unsigned int>
+        || std::same_as<T, unsigned long long>)
+    struct SharedAtomic::Op<alpaka::operation::Add, internal::CudaHipAtomic, T>
+    {
+        static __device__ auto atomicOp(internal::CudaHipAtomic const, T* const addr, T const& value) -> T
+        {
+#        if ALPAKA_COMP_CLANG_CUDA
+            auto* const shared = (__attribute__((address_space(3))) T*) (addr);
+            return __scoped_atomic_fetch_add(shared, value, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
+#        else
+            auto const shared = static_cast<std::uint32_t>(__cvta_generic_to_shared(addr));
+            T old;
+            if constexpr(std::same_as<T, float>)
+                asm volatile("atom.shared.add.f32 %0, [%1], %2;" : "=f"(old) : "r"(shared), "f"(value) : "memory");
+            else if constexpr(std::same_as<T, double>)
+                asm volatile("atom.shared.add.f64 %0, [%1], %2;" : "=d"(old) : "r"(shared), "d"(value) : "memory");
+            else if constexpr(std::same_as<T, int>)
+                asm volatile("atom.shared.add.s32 %0, [%1], %2;" : "=r"(old) : "r"(shared), "r"(value) : "memory");
+            else if constexpr(std::same_as<T, unsigned int>)
+                asm volatile("atom.shared.add.u32 %0, [%1], %2;" : "=r"(old) : "r"(shared), "r"(value) : "memory");
+            else
+                asm volatile("atom.shared.add.u64 %0, [%1], %2;" : "=l"(old) : "r"(shared), "l"(value) : "memory");
+            return old;
+#        endif
+        }
+    };
+#    endif
 } // namespace alpaka::onAcc::internalCompute
 #endif
