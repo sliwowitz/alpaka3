@@ -129,6 +129,14 @@ void testInclusiveScan(
     auto res = validateResult<T_Data>(computeQueue, hostIn, outBuf, numEl, onHost::internal::inclusiveScan);
     CHECK(res == EXIT_SUCCESS);
 
+    // inclusive scan of a view whose elements are const
+    INFO("inclusive scan, const input");
+    onHost::memcpy(computeQueue, inBuf, hostIn);
+    auto const constIn = makeView(computeQueue.getApi(), static_cast<T_Data const*>(inBuf.data()), inBuf.getExtents());
+    onHost::inclusiveScan(computeQueue, exec, outBuf, constIn);
+    res = validateResult<T_Data>(computeQueue, hostIn, outBuf, numEl, onHost::internal::inclusiveScan);
+    CHECK(res == EXIT_SUCCESS);
+
     // inclusive scan, in-place
     INFO("inclusive scan, no buffer, in-place");
     onHost::inclusiveScanInPlace(computeQueue, exec, inBuf);
