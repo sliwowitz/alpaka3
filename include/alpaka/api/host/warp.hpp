@@ -47,7 +47,7 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc>
     struct All::Op<T_Acc, api::Host>
     {
-        constexpr bool operator()(T_Acc const& acc, api::Host, int32_t predicate) const
+        constexpr bool operator()(T_Acc const& acc, api::Host, Participation auto, int32_t predicate) const
         {
             alpaka::unused(acc);
             return predicate != 0;
@@ -57,7 +57,7 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc>
     struct Any::Op<T_Acc, api::Host>
     {
-        constexpr bool operator()(T_Acc const& acc, api::Host, int32_t predicate) const
+        constexpr bool operator()(T_Acc const& acc, api::Host, Participation auto, int32_t predicate) const
         {
             alpaka::unused(acc);
             return predicate != 0;
@@ -67,7 +67,7 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc>
     struct Ballot::Op<T_Acc, api::Host>
     {
-        constexpr auto operator()(T_Acc const& acc, api::Host, int32_t predicate) const
+        constexpr auto operator()(T_Acc const& acc, api::Host, Participation auto, int32_t predicate) const
         {
             alpaka::unused(acc);
             return predicate != 0 ? 1u : 0u;
@@ -77,7 +77,13 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc, typename T>
     struct Shfl::Op<T_Acc, api::Host, T>
     {
-        constexpr T operator()(T_Acc const& acc, api::Host, T const& value, uint32_t srcLane, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const& acc,
+            api::Host,
+            Participation auto,
+            T const& value,
+            uint32_t srcLane,
+            uint32_t width) const
         {
             alpaka::unused(acc, srcLane, width);
             return value;
@@ -87,7 +93,13 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc, typename T>
     struct ShflDown::Op<T_Acc, api::Host, T>
     {
-        constexpr T operator()(T_Acc const& acc, api::Host, T const& value, uint32_t delta, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const& acc,
+            api::Host,
+            Participation auto,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
             alpaka::unused(acc, delta, width);
             return value;
@@ -97,7 +109,13 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc, typename T>
     struct ShflUp::Op<T_Acc, api::Host, T>
     {
-        constexpr T operator()(T_Acc const& acc, api::Host, T const& value, uint32_t delta, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const& acc,
+            api::Host,
+            Participation auto,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
             alpaka::unused(acc, delta, width);
             return value;
@@ -107,7 +125,13 @@ namespace alpaka::onAcc::warp::internal
     template<typename T_Acc, typename T>
     struct ShflXor::Op<T_Acc, api::Host, T>
     {
-        constexpr T operator()(T_Acc const& acc, api::Host, T const& value, uint32_t laneMask, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const& acc,
+            api::Host,
+            Participation auto,
+            T const& value,
+            uint32_t laneMask,
+            uint32_t width) const
         {
             alpaka::unused(acc, laneMask, width);
             return value;

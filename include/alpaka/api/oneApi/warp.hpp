@@ -65,7 +65,7 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc>
     struct All::Op<T_Acc, api::OneApi>
     {
-        bool operator()(T_Acc const& acc, api::OneApi, int32_t predicate) const
+        bool operator()(T_Acc const& acc, api::OneApi, Participation auto, int32_t predicate) const
         {
             using DeviceKind = ALPAKA_TYPEOF(acc[object::deviceKind]);
             if constexpr(DeviceKind{} == alpaka::deviceKind::amdGpu)
@@ -95,7 +95,7 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc>
     struct Any::Op<T_Acc, api::OneApi>
     {
-        bool operator()(T_Acc const& acc, api::OneApi, int32_t predicate) const
+        bool operator()(T_Acc const& acc, api::OneApi, Participation auto, int32_t predicate) const
         {
             using DeviceKind = ALPAKA_TYPEOF(acc[object::deviceKind]);
             if constexpr(DeviceKind{} == alpaka::deviceKind::amdGpu)
@@ -125,7 +125,7 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc>
     struct Ballot::Op<T_Acc, api::OneApi>
     {
-        auto operator()(T_Acc const&, api::OneApi, int32_t predicate) const
+        auto operator()(T_Acc const&, api::OneApi, Participation auto, int32_t predicate) const
         {
             sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
             auto sgMask = sycl::ext::oneapi::group_ballot(sg, predicate != 0);
@@ -141,7 +141,13 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
     struct Shfl::Op<T_Acc, api::OneApi, T>
     {
-        constexpr T operator()(T_Acc const&, api::OneApi, T const& value, uint32_t srcLane, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const&,
+            api::OneApi,
+            Participation auto,
+            T const& value,
+            uint32_t srcLane,
+            uint32_t width) const
         {
             sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
             uint32_t laneIdxInWarp = sg.get_local_id()[0];
@@ -155,7 +161,13 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
     struct ShflDown::Op<T_Acc, api::OneApi, T>
     {
-        constexpr T operator()(T_Acc const&, api::OneApi, T const& value, uint32_t delta, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const&,
+            api::OneApi,
+            Participation auto,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
             sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 
@@ -172,7 +184,13 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
     struct ShflUp::Op<T_Acc, api::OneApi, T>
     {
-        constexpr T operator()(T_Acc const&, api::OneApi, T const& value, uint32_t delta, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const&,
+            api::OneApi,
+            Participation auto,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
             sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 
@@ -189,7 +207,13 @@ namespace alpaka::onAcc::warp::internal
     template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
     struct ShflXor::Op<T_Acc, api::OneApi, T>
     {
-        constexpr T operator()(T_Acc const&, api::OneApi, T const& value, uint32_t laneMask, uint32_t width) const
+        constexpr T operator()(
+            T_Acc const&,
+            api::OneApi,
+            Participation auto,
+            T const& value,
+            uint32_t laneMask,
+            uint32_t width) const
         {
             sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
             uint32_t laneIdxInWarp = sg.get_local_id()[0];

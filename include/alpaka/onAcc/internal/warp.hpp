@@ -27,6 +27,39 @@
 #include <type_traits>
 #include <utility>
 
+namespace alpaka::onAcc::warp
+{
+    /** Which lanes take part in a warp function.
+     *
+     * `activeLanes`, the default: the lanes that are active at the call take part, as the API's active mask names
+     * them. A function can be called from a divergent branch, and the lanes of that branch exchange among
+     * themselves. On CUDA every call then reads the active mask and checks the lanes for divergence.
+     *
+     * `wholeWarp`: every lane of the warp calls the function, and the caller promises it. The API's intrinsic takes
+     * the whole warp as its mask, a constant, so the call carries no read of the active mask and no divergence
+     * check. A call under this promise from a divergent branch is undefined, as the intrinsic with that mask is.
+     *
+     * The APIs whose warp functions take no mask (HIP, oneAPI, the host) read the same under both.
+     */
+    namespace participation
+    {
+        struct ActiveLanes
+        {
+        };
+
+        struct WholeWarp
+        {
+        };
+
+        inline constexpr ActiveLanes activeLanes{};
+        inline constexpr WholeWarp wholeWarp{};
+    } // namespace participation
+
+    template<typename T>
+    concept Participation
+        = std::is_same_v<T, participation::ActiveLanes> || std::is_same_v<T, participation::WholeWarp>;
+} // namespace alpaka::onAcc::warp
+
 namespace alpaka::onAcc::warp::internal
 {
     template<alpaka::onAcc::concepts::Acc T_Acc>
@@ -172,7 +205,7 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr bool operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr bool operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
                 static_assert(
@@ -188,7 +221,7 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr bool operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr bool operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
                 static_assert(
@@ -204,7 +237,7 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr auto operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr auto operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
                 static_assert(
@@ -220,7 +253,13 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t srcLane, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t srcLane,
+                uint32_t width) const
             {
                 alpaka::unused(value, srcLane, width);
                 static_assert(
@@ -236,7 +275,13 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t delta, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t delta,
+                uint32_t width) const
             {
                 alpaka::unused(value, delta, width);
                 static_assert(
@@ -252,7 +297,13 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t delta, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t delta,
+                uint32_t width) const
             {
                 alpaka::unused(value, delta, width);
                 static_assert(
@@ -268,7 +319,13 @@ namespace alpaka::onAcc::warp::internal
         template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t laneMask, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t laneMask,
+                uint32_t width) const
             {
                 alpaka::unused(value, laneMask, width);
                 static_assert(
