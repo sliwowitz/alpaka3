@@ -15,7 +15,18 @@
 #if ALPAKA_LANG_CUDA
 namespace alpaka::onAcc::warp::internal
 {
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    /// The mask of the lanes that take part: the active lanes as the device names them, or the whole warp.
+    inline __device__ unsigned maskOf(participation::ActiveLanes)
+    {
+        return __activemask();
+    }
+
+    constexpr __device__ unsigned maskOf(participation::WholeWarp)
+    {
+        return 0xffff'ffffu;
+    }
+
+    template<typename T_Acc>
     struct Activemask::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Cuda) const
@@ -24,7 +35,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct GetLaneIdx::Op<T_Acc, api::Cuda>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Cuda) const
@@ -53,70 +64,102 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct All::Op<T_Acc, api::Cuda>
     {
-        constexpr __device__ bool operator()(T_Acc const&, api::Cuda, int32_t predicate) const
+        constexpr __device__ bool operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            int32_t predicate) const
         {
-            return __all_sync(__activemask(), static_cast<int>(predicate)) != 0;
+            return __all_sync(maskOf(participation), static_cast<int>(predicate)) != 0;
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Any::Op<T_Acc, api::Cuda>
     {
-        constexpr __device__ bool operator()(T_Acc const&, api::Cuda, int32_t predicate) const
+        constexpr __device__ bool operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            int32_t predicate) const
         {
-            return __any_sync(__activemask(), static_cast<int>(predicate)) != 0;
+            return __any_sync(maskOf(participation), static_cast<int>(predicate)) != 0;
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Ballot::Op<T_Acc, api::Cuda>
     {
-        constexpr __device__ auto operator()(T_Acc const&, api::Cuda, int32_t predicate) const
+        constexpr __device__ auto operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            int32_t predicate) const
         {
-            return __ballot_sync(__activemask(), static_cast<int>(predicate));
+            return __ballot_sync(maskOf(participation), static_cast<int>(predicate));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct Shfl::Op<T_Acc, api::Cuda, T>
     {
-        constexpr __device__ T
-        operator()(T_Acc const&, api::Cuda, T const& value, uint32_t srcLane, uint32_t width) const
+        constexpr __device__ T operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            T const& value,
+            uint32_t srcLane,
+            uint32_t width) const
         {
-            return __shfl_sync(__activemask(), value, static_cast<int>(srcLane), static_cast<int>(width));
+            return __shfl_sync(maskOf(participation), value, static_cast<int>(srcLane), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflDown::Op<T_Acc, api::Cuda, T>
     {
-        constexpr __device__ T
-        operator()(T_Acc const&, api::Cuda, T const& value, uint32_t delta, uint32_t width) const
+        constexpr __device__ T operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
-            return __shfl_down_sync(__activemask(), value, static_cast<int>(delta), static_cast<int>(width));
+            return __shfl_down_sync(maskOf(participation), value, static_cast<int>(delta), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflUp::Op<T_Acc, api::Cuda, T>
     {
-        constexpr __device__ T
-        operator()(T_Acc const&, api::Cuda, T const& value, uint32_t delta, uint32_t width) const
+        constexpr __device__ T operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            T const& value,
+            uint32_t delta,
+            uint32_t width) const
         {
-            return __shfl_up_sync(__activemask(), value, static_cast<int>(delta), static_cast<int>(width));
+            return __shfl_up_sync(maskOf(participation), value, static_cast<int>(delta), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflXor::Op<T_Acc, api::Cuda, T>
     {
-        constexpr __device__ T
-        operator()(T_Acc const&, api::Cuda, T const& value, uint32_t laneMask, uint32_t width) const
+        constexpr __device__ T operator()(
+            T_Acc const&,
+            api::Cuda,
+            Participation auto participation,
+            T const& value,
+            uint32_t laneMask,
+            uint32_t width) const
         {
-            return __shfl_xor_sync(__activemask(), value, static_cast<int>(laneMask), static_cast<int>(width));
+            return __shfl_xor_sync(maskOf(participation), value, static_cast<int>(laneMask), static_cast<int>(width));
         }
     };
 } // namespace alpaka::onAcc::warp::internal

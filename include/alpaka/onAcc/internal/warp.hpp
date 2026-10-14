@@ -13,13 +13,52 @@
 
 #pragma once
 
+#include "alpaka/api/api.hpp"
 #include "alpaka/api/concepts/api.hpp"
+#include "alpaka/api/cuda/computeApi.hpp"
+#include "alpaka/api/hip/computeApi.hpp"
 #include "alpaka/api/trait.hpp"
+#include "alpaka/api/unifiedCudaHip/ComputeApi.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/onAcc/Acc.hpp"
 #include "alpaka/tag.hpp"
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
+
+namespace alpaka::onAcc::warp
+{
+    /** Which lanes take part in a warp function.
+     *
+     * `activeLanes`, the default: the lanes that are active at the call take part, as the API's active mask names
+     * them. A function can be called from a divergent branch, and the lanes of that branch exchange among
+     * themselves. On CUDA every call then reads the active mask and checks the lanes for divergence.
+     *
+     * `wholeWarp`: every lane of the warp calls the function, and the caller promises it. The API's intrinsic takes
+     * the whole warp as its mask, a constant, so the call carries no read of the active mask and no divergence
+     * check. A call under this promise from a divergent branch is undefined, as the intrinsic with that mask is.
+     *
+     * The APIs whose warp functions take no mask (HIP, oneAPI, the host) read the same under both.
+     */
+    namespace participation
+    {
+        struct ActiveLanes
+        {
+        };
+
+        struct WholeWarp
+        {
+        };
+
+        inline constexpr ActiveLanes activeLanes{};
+        inline constexpr WholeWarp wholeWarp{};
+    } // namespace participation
+
+    template<typename T>
+    concept Participation
+        = std::is_same_v<T, participation::ActiveLanes> || std::is_same_v<T, participation::WholeWarp>;
+} // namespace alpaka::onAcc::warp
 
 namespace alpaka::onAcc::warp::internal
 {
@@ -32,12 +71,14 @@ namespace alpaka::onAcc::warp::internal
     /** Retrieve a bit-mask describing which warp lanes are active. */
     struct Activemask
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api>
+        template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
             constexpr auto operator()(T_Acc const&, T_Api) const
             {
-                static_assert(sizeof(T_Acc) && false, "Missing warp Activemask implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp Activemask implementation for the accelerator or the executor.");
                 return 0u;
             }
         };
@@ -45,23 +86,97 @@ namespace alpaka::onAcc::warp::internal
 
     struct GetLaneIdx
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api>
+        template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
             constexpr auto operator()(T_Acc const&, T_Api) const
             {
-                static_assert(sizeof(T_Acc) && false, "Missing warp GetLaneIdx implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp GetLaneIdx implementation for the accelerator or the executor.");
                 return 0u;
             }
         };
     };
 
-    /** Return the lane index of the current thread within its warp. */
-    constexpr uint32_t getLaneIdx(alpaka::onAcc::concepts::Acc auto const& acc)
+    /** The API a warp function runs on: the accelerator's, or the API of this compile pass for an executor.
+     *
+     * A warp function reads nothing of the accelerator on CUDA, HIP and the host; code without an accelerator
+     * at hand, such as a function called from deep inside a kernel, passes the executor it was compiled for.
+     * oneAPI reads the sub-group from the accelerator, and takes the accelerator alone.
+     */
+    constexpr auto apiOf(auto const& accOrExecutor)
     {
-        using Acc = ALPAKA_TYPEOF(acc);
-        using Api = ALPAKA_TYPEOF(acc[object::api]);
-        return GetLaneIdx::Op<Acc, Api>{}(acc, Api{});
+        if constexpr(alpaka::onAcc::concepts::Acc<ALPAKA_TYPEOF(accOrExecutor)>)
+            return ALPAKA_TYPEOF(accOrExecutor[object::api]){};
+        else
+            return thisApi();
+    }
+
+    /// The device kind an API runs its warps on, for the APIs that have one kind of device.
+    template<alpaka::concepts::Api T_Api>
+    struct DeviceKindOf;
+
+    template<>
+    struct DeviceKindOf<api::Cuda>
+    {
+        using type = alpaka::deviceKind::NvidiaGpu;
+    };
+
+    template<>
+    struct DeviceKindOf<api::Hip>
+    {
+        using type = alpaka::deviceKind::AmdGpu;
+    };
+
+    /** The size of a warp of a device kind, as the compute API of the kind states it.
+     *
+     * The trait is complete only in a compile pass of CUDA or HIP, where the unified compute API declares the size;
+     * a host pass never asks for it, because the host API answers before this trait is read.
+     */
+    template<alpaka::concepts::DeviceKind T_DeviceKind>
+    struct WarpSizeOfKind;
+
+#if ALPAKA_LANG_CUDA || ALPAKA_LANG_HIP
+    template<alpaka::concepts::DeviceKind T_DeviceKind>
+    requires requires { unifiedCudaHip::internal::WarpSize::Get<T_DeviceKind>{}(); }
+    struct WarpSizeOfKind<T_DeviceKind>
+    {
+        static constexpr uint32_t value = unifiedCudaHip::internal::WarpSize::Get<T_DeviceKind>{}();
+    };
+#endif
+
+    /// The size of a warp of an API, where the API alone decides it: one on the host, the device kind's on CUDA and
+    /// HIP.
+    template<alpaka::concepts::Api T_Api>
+    constexpr uint32_t apiWarpSize()
+    {
+        if constexpr(std::is_same_v<T_Api, api::Host>)
+            return 1u;
+        else
+            return WarpSizeOfKind<typename DeviceKindOf<T_Api>::type>::value;
+    }
+
+    /** The size of a warp: the accelerator's, or the API's of this compile pass for an executor.
+     *
+     * The API of the executor is read through the executor, so that the size is asked for where the function is
+     * used, with every compute API declared, and not where this template is defined.
+     */
+    template<typename T_AccOrExecutor>
+    constexpr uint32_t sizeOf()
+    {
+        if constexpr(alpaka::onAcc::concepts::Acc<T_AccOrExecutor>)
+            return T_AccOrExecutor::getWarpSize();
+        else
+            return apiWarpSize<ALPAKA_TYPEOF(apiOf(std::declval<T_AccOrExecutor const&>()))>();
+    }
+
+    /** Return the lane index of the current thread within its warp. */
+    constexpr uint32_t getLaneIdx(auto const& accOrExecutor)
+    {
+        using Acc = ALPAKA_TYPEOF(accOrExecutor);
+        using Api = ALPAKA_TYPEOF(apiOf(accOrExecutor));
+        return GetLaneIdx::Op<Acc, Api>{}(accOrExecutor, Api{});
     }
 
     struct GetWarpIdx
@@ -87,13 +202,15 @@ namespace alpaka::onAcc::warp::internal
 
     struct All
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api>
+        template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr bool operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr bool operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
-                static_assert(sizeof(T_Acc) && false, "Missing warp All implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp All implementation for the accelerator or the executor.");
                 return false;
             }
         };
@@ -101,13 +218,15 @@ namespace alpaka::onAcc::warp::internal
 
     struct Any
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api>
+        template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr bool operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr bool operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
-                static_assert(sizeof(T_Acc) && false, "Missing warp Any implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp Any implementation for the accelerator or the executor.");
                 return false;
             }
         };
@@ -115,13 +234,15 @@ namespace alpaka::onAcc::warp::internal
 
     struct Ballot
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api>
+        template<typename T_Acc, alpaka::concepts::Api T_Api>
         struct Op
         {
-            constexpr auto operator()(T_Acc const&, T_Api, int32_t predicate) const
+            constexpr auto operator()(T_Acc const&, T_Api, Participation auto, int32_t predicate) const
             {
                 alpaka::unused(predicate);
-                static_assert(sizeof(T_Acc) && false, "Missing warp Ballot implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp Ballot implementation for the accelerator or the executor.");
                 return 0;
             }
         };
@@ -129,13 +250,21 @@ namespace alpaka::onAcc::warp::internal
 
     struct Shfl
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api, typename T>
+        template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t srcLane, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t srcLane,
+                uint32_t width) const
             {
                 alpaka::unused(value, srcLane, width);
-                static_assert(sizeof(T_Acc) && false, "Missing warp Shfl implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp Shfl implementation for the accelerator or the executor.");
                 return T{};
             }
         };
@@ -143,13 +272,21 @@ namespace alpaka::onAcc::warp::internal
 
     struct ShflDown
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api, typename T>
+        template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t delta, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t delta,
+                uint32_t width) const
             {
                 alpaka::unused(value, delta, width);
-                static_assert(sizeof(T_Acc) && false, "Missing warp ShflDown implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp ShflDown implementation for the accelerator or the executor.");
                 return T{};
             }
         };
@@ -157,13 +294,21 @@ namespace alpaka::onAcc::warp::internal
 
     struct ShflUp
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api, typename T>
+        template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t delta, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t delta,
+                uint32_t width) const
             {
                 alpaka::unused(value, delta, width);
-                static_assert(sizeof(T_Acc) && false, "Missing warp ShflUp implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp ShflUp implementation for the accelerator or the executor.");
                 return T{};
             }
         };
@@ -171,13 +316,21 @@ namespace alpaka::onAcc::warp::internal
 
     struct ShflXor
     {
-        template<alpaka::onAcc::concepts::Acc T_Acc, alpaka::concepts::Api T_Api, typename T>
+        template<typename T_Acc, alpaka::concepts::Api T_Api, typename T>
         struct Op
         {
-            constexpr T operator()(T_Acc const&, T_Api, T const& value, uint32_t laneMask, uint32_t width) const
+            constexpr T operator()(
+                T_Acc const&,
+                T_Api,
+                Participation auto,
+                T const& value,
+                uint32_t laneMask,
+                uint32_t width) const
             {
                 alpaka::unused(value, laneMask, width);
-                static_assert(sizeof(T_Acc) && false, "Missing warp ShflXor implementation for the accelerator.");
+                static_assert(
+                    sizeof(T_Acc) && false,
+                    "Missing warp ShflXor implementation for the accelerator or the executor.");
                 return T{};
             }
         };

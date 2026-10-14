@@ -15,7 +15,7 @@
 #if ALPAKA_LANG_HIP
 namespace alpaka::onAcc::warp::internal
 {
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Activemask::Op<T_Acc, api::Hip>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Hip) const
@@ -24,7 +24,7 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct GetLaneIdx::Op<T_Acc, api::Hip>
     {
         constexpr __device__ auto operator()(T_Acc const&, api::Hip) const
@@ -48,66 +48,68 @@ namespace alpaka::onAcc::warp::internal
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct All::Op<T_Acc, api::Hip>
     {
-        constexpr __device__ bool operator()(T_Acc const&, api::Hip, int32_t predicate) const
+        constexpr __device__ bool operator()(T_Acc const&, api::Hip, Participation auto, int32_t predicate) const
         {
             return __all(static_cast<int>(predicate)) != 0u;
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Any::Op<T_Acc, api::Hip>
     {
-        constexpr __device__ bool operator()(T_Acc const&, api::Hip, int32_t predicate) const
+        constexpr __device__ bool operator()(T_Acc const&, api::Hip, Participation auto, int32_t predicate) const
         {
             return __any(static_cast<int>(predicate)) != 0;
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc>
+    template<typename T_Acc>
     struct Ballot::Op<T_Acc, api::Hip>
     {
-        constexpr __device__ auto operator()(T_Acc const&, api::Hip, int32_t predicate) const
+        constexpr __device__ auto operator()(T_Acc const&, api::Hip, Participation auto, int32_t predicate) const
         {
             return __ballot(static_cast<int>(predicate));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct Shfl::Op<T_Acc, api::Hip, T>
     {
         constexpr __device__ T
-        operator()(T_Acc const&, api::Hip, T const& value, uint32_t srcLane, uint32_t width) const
+        operator()(T_Acc const&, api::Hip, Participation auto, T const& value, uint32_t srcLane, uint32_t width) const
         {
             return __shfl(value, static_cast<int>(srcLane), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflDown::Op<T_Acc, api::Hip, T>
     {
-        constexpr __device__ T operator()(T_Acc const&, api::Hip, T const& value, uint32_t delta, uint32_t width) const
+        constexpr __device__ T
+        operator()(T_Acc const&, api::Hip, Participation auto, T const& value, uint32_t delta, uint32_t width) const
         {
             return __shfl_down(value, static_cast<int>(delta), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflUp::Op<T_Acc, api::Hip, T>
     {
-        constexpr __device__ T operator()(T_Acc const&, api::Hip, T const& value, uint32_t delta, uint32_t width) const
+        constexpr __device__ T
+        operator()(T_Acc const&, api::Hip, Participation auto, T const& value, uint32_t delta, uint32_t width) const
         {
             return __shfl_up(value, static_cast<int>(delta), static_cast<int>(width));
         }
     };
 
-    template<alpaka::onAcc::concepts::Acc T_Acc, typename T>
+    template<typename T_Acc, typename T>
     struct ShflXor::Op<T_Acc, api::Hip, T>
     {
         constexpr __device__ T
-        operator()(T_Acc const&, api::Hip, T const& value, uint32_t laneMask, uint32_t width) const
+        operator()(T_Acc const&, api::Hip, Participation auto, T const& value, uint32_t laneMask, uint32_t width) const
         {
             return __shfl_xor(value, static_cast<int>(laneMask), static_cast<int>(width));
         }
