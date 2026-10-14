@@ -34,6 +34,10 @@ TEMPLATE_LIST_TEST_CASE("deviceProperties", "[device][property]", TestApis)
     INFO("dim = 3 blocksPerGrid = " << deviceProperties.getMaxBlocksPerGrid<3>());
     INFO("dim = 4 blocksPerGrid = " << deviceProperties.getMaxBlocksPerGrid<4>());
     INFO("dim = 5 blocksPerGrid = " << deviceProperties.getMaxBlocksPerGrid<5>());
+
+    // The host reads its own pageable memory.
+    if constexpr(std::is_same_v<ALPAKA_TYPEOF(device.getApi()), api::Host>)
+        CHECK(deviceProperties.pageableHostMemoryAccess);
     // This call is required else no information will be shown on the terminal.
     SUCCEED("-----------------------------");
 }

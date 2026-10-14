@@ -55,6 +55,14 @@ namespace alpaka::onHost
         /** The maximum total number of threads per thread block. */
         uint32_t maxThreadsPerBlock;
 
+        /** The device reads and writes the pageable memory of the host.
+         *
+         * A kernel of a device with this property dereferences a pointer to pageable host memory, without a
+         * registration of the pages. The host device has it. A GPU has it where the hardware and the driver
+         * translate the addresses of host pages, e.g. an integrated GPU or a GPU with address translation services.
+         */
+        bool pageableHostMemoryAccess = false;
+
         /** Maximum number of threads within a thread block for each dimension.
          *
          * @attention Do not assume that the limits are equal for any dimension.
@@ -119,6 +127,7 @@ namespace alpaka::onHost
         s << "maxBlocksPerGrid: " << p.maxBlocksPerGrid << "\n";
         s << "globalMemCapacityBytes: " << p.globalMemCapacityBytes << "\n";
         s << "sharedMemPerBlockBytes: " << p.sharedMemPerBlockBytes << "\n";
+        s << "pageableHostMemoryAccess: " << p.pageableHostMemoryAccess << "\n";
         return s;
     };
 } // namespace alpaka::onHost

@@ -134,6 +134,15 @@ namespace alpaka::onHost
                 prop.globalMemCapacityBytes = devProp.totalGlobalMem;
                 prop.sharedMemPerBlockBytes = devProp.sharedMemPerBlock;
 
+                int pageableMemoryAccess = 0;
+                ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
+                    ApiInterface,
+                    ApiInterface::deviceGetAttribute(
+                        &pageableMemoryAccess,
+                        ApiInterface::deviceAttributePageableMemoryAccess,
+                        static_cast<int>(deviceIdx)));
+                prop.pageableHostMemoryAccess = pageableMemoryAccess != 0;
+
                 prop.maxThreadsPerBlock = devProp.maxThreadsPerBlock;
                 // will be copied into the lampda and follows cuda index order
                 Vec<uint32_t, 3u> cudaMaxThreadsPerBlock{

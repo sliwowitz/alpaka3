@@ -81,6 +81,7 @@ namespace alpaka
             = ::hipDeviceAttributeMaxSharedMemoryPerBlock;
         static constexpr DeviceAttr_t deviceAttributeMaxThreadsPerBlock = ::hipDeviceAttributeMaxThreadsPerBlock;
         static constexpr DeviceAttr_t deviceAttributeMultiprocessorCount = ::hipDeviceAttributeMultiprocessorCount;
+        static constexpr DeviceAttr_t deviceAttributePageableMemoryAccess = ::hipDeviceAttributePageableMemoryAccess;
         static constexpr DeviceAttr_t deviceAttributeWarpSize = ::hipDeviceAttributeWarpSize;
 
         static constexpr Memory_t memoryTypeUnregistered = ::hipMemoryTypeUnregistered;

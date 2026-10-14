@@ -78,6 +78,7 @@ namespace alpaka
         static constexpr DeviceAttr_t deviceAttributeMaxSharedMemoryPerBlock = ::cudaDevAttrMaxSharedMemoryPerBlock;
         static constexpr DeviceAttr_t deviceAttributeMaxThreadsPerBlock = ::cudaDevAttrMaxThreadsPerBlock;
         static constexpr DeviceAttr_t deviceAttributeMultiprocessorCount = ::cudaDevAttrMultiProcessorCount;
+        static constexpr DeviceAttr_t deviceAttributePageableMemoryAccess = ::cudaDevAttrPageableMemoryAccess;
         static constexpr DeviceAttr_t deviceAttributeWarpSize = ::cudaDevAttrWarpSize;
 
         static constexpr Memory_t memoryTypeUnregistered = ::cudaMemoryTypeUnregistered;
