@@ -16,17 +16,34 @@
 
 namespace alpaka::onAcc
 {
+    namespace detail
+    {
+        /** The executor an atomic dispatches on: the argument itself, or the executor of an accelerator.
+         *
+         * An atomic reads nothing else from the accelerator, so code without an accelerator at hand, such as a
+         * function called from deep inside a kernel, can pass the executor type it was compiled for.
+         */
+        constexpr auto atomicExecutor(auto const& accOrExecutor)
+        {
+            if constexpr(alpaka::concepts::Executor<ALPAKA_TYPEOF(accOrExecutor)>)
+                return accOrExecutor;
+            else
+                return accOrExecutor[object::exec];
+        }
+    } // namespace detail
+
     //! Executes the given operation atomically.
     //!
     //! \tparam T_Op The operation type.
     //! \tparam T The value type.
+    //! \param acc The accelerator, or its executor. The atomics below take either as well.
     //! \param addr The value to change atomically.
     //! \param value The value used in the atomic operation.
     template<typename T_Op, typename T, typename T_Scope = scope::Device>
     constexpr auto atomicOp(auto const& acc, T* const addr, T const& value, T_Scope const scope = T_Scope()) -> T
     {
         static_assert(!std::is_same_v<T_Scope, scope::System>, "System scope is currently not supported.");
-        auto atomicImpl = trait::getAtomicImpl(acc[object::exec], scope);
+        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), scope);
         return internalCompute::Atomic::Op<T_Op, ALPAKA_TYPEOF(atomicImpl), T, T_Scope>::atomicOp(
             atomicImpl,
             addr,
@@ -49,7 +66,7 @@ namespace alpaka::onAcc
         T_Scope const scope = T_Scope()) -> T
     {
         static_assert(!std::is_same_v<T_Scope, scope::System>, "System scope is currently not supported.");
-        auto atomicImpl = trait::getAtomicImpl(acc[object::exec], scope);
+        auto atomicImpl = trait::getAtomicImpl(detail::atomicExecutor(acc), scope);
         return internalCompute::Atomic::Op<T_Op, ALPAKA_TYPEOF(atomicImpl), T, T_Scope>::atomicOp(
             atomicImpl,
             addr,
