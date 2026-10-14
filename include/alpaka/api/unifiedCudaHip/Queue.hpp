@@ -32,6 +32,8 @@
 
 #    include "alpaka/core/ApiCudaRt.hpp"
 
+#    include <array>
+#    include <atomic>
 #    include <cstdint>
 #    include <sstream>
 
@@ -335,28 +337,12 @@ namespace alpaka::onHost
                 constexpr uint32_t layerDim = dim >= 4u ? 1u : dim;
                 using IdxType = typename T_NumBlocks::value_type;
 
-                Vec<IdxType, layerDim> numBlocks;
-                Vec<IdxType, layerDim> numThreadsPerBlock;
-
-                if constexpr(dim >= 4u)
-                {
-                    numBlocks = threadSpec.getNumBlocks().product();
-                    numThreadsPerBlock = threadSpec.getNumThreads().product();
-                }
-                else
-                {
-                    numBlocks = threadSpec.getNumBlocks();
-                    numThreadsPerBlock = threadSpec.getNumThreads();
-                }
-
                 using ThreadSpecType = std::conditional_t<
                     dim >= 4u,
                     ALPAKA_TYPEOF(threadSpec),
                     OptimizedThreadSpec<
                         typename ALPAKA_TYPEOF(threadSpec)::NumBlocksVecType,
                         typename ALPAKA_TYPEOF(threadSpec)::NumThreadsVecType>>;
-                // thread spec which is only holding data if the dimension is larger than 3u
-                auto optimizedThreadSpec = ThreadSpecType(threadSpec.getNumBlocks(), threadSpec.getNumThreads());
 
                 auto kernelName = gpuKernel<
                     ALPAKA_TYPEOF(getApi(queue)),
@@ -364,8 +350,58 @@ namespace alpaka::onHost
                     T_Executor,
                     launchedWidthFrameSpec,
                     T_KernelBundle,
-                    ALPAKA_TYPEOF(optimizedThreadSpec)>;
+                    ThreadSpecType>;
 
+                /* The threads of a block share the registers of the block. A kernel that needs many registers can
+                 * therefore not run in a block of every size, and a launch above the limit of the kernel fails. A
+                 * frame can be traversed by fewer threads than it has elements, so a launch with a frame
+                 * specification stays within the limit of its kernel. A thread count that is a compile-time
+                 * constant is a part of the type of the kernel, and it stays as it is stated.
+                 *
+                 * The limit belongs to the kernel function on one device, and this call operator is one function
+                 * for each kernel. So one query serves every launch of the kernel on that device. The table has a
+                 * slot for each device index below its size, and zero says that the kernel was not asked there. A
+                 * device beyond the table is asked at every launch.
+                 */
+                auto numThreads = threadSpec.getNumThreads();
+                if constexpr(launchedWidthFrameSpec && !alpaka::concepts::CVector<T_NumThreads>)
+                {
+                    static std::array<std::atomic<int>, 16> limitOnDevice{};
+                    auto const device = static_cast<std::size_t>(onHost::getNativeHandle(queue.m_device));
+                    int maxThreadsPerBlock
+                        = device < limitOnDevice.size() ? limitOnDevice[device].load(std::memory_order_relaxed) : 0;
+                    if(maxThreadsPerBlock == 0)
+                    {
+                        typename ApiInterface::FuncAttributes_t attributes;
+                        ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
+                            ApiInterface,
+                            ApiInterface::funcGetAttributes(&attributes, kernelName));
+                        maxThreadsPerBlock = attributes.maxThreadsPerBlock;
+                        if(device < limitOnDevice.size())
+                            limitOnDevice[device].store(maxThreadsPerBlock, std::memory_order_relaxed);
+                    }
+                    if(maxThreadsPerBlock > 0)
+                        numThreads = api::util::adjustToLimit(numThreads, maxThreadsPerBlock);
+                }
+
+                Vec<IdxType, layerDim> numBlocks;
+                Vec<IdxType, layerDim> numThreadsPerBlock;
+
+                if constexpr(dim >= 4u)
+                {
+                    numBlocks = threadSpec.getNumBlocks().product();
+                    numThreadsPerBlock = numThreads.product();
+                }
+                else
+                {
+                    numBlocks = threadSpec.getNumBlocks();
+                    numThreadsPerBlock = numThreads;
+                }
+
+                // thread spec which is only holding data if the dimension is larger than 3u
+                auto optimizedThreadSpec = ThreadSpecType(threadSpec.getNumBlocks(), numThreads);
+
+                // The size is that of the stated specification, so a block with fewer threads has no less memory.
                 uint32_t blockDynSharedMemBytes = onHost::getDynSharedMemBytes(threadSpec, kernelBundle);
 
                 kernelName<<<
