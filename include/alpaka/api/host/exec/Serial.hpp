@@ -40,7 +40,9 @@ namespace alpaka::onHost
 
             void operator()(auto const& kernelBundle, auto const& dict) const
             {
-                if(m_setThreadAffinity)
+                /* A device of all CPU domains leaves the affinity of the calling thread as it is, as the callback
+                 * thread and the TBB executor do. */
+                if(m_setThreadAffinity && m_numaIdx != internal::hwloc::allDomains)
                     internal::hwloc::setThreadAffinity(m_numaIdx);
                 // copy from num blocks to derive correct index type
                 auto blockIdx = m_threadBlocking.getNumBlocks();
