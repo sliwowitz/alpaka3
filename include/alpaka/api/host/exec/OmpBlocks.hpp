@@ -58,8 +58,11 @@ namespace alpaka::onHost
 
                 /* Do not change the affinity if we are executed within a OpenMP parallel section, the user should keep
                  * the control over it.
+                 * A device of all CPU domains does not change it either, as the callback thread and the TBB executor
+                 * do not: the cpuset of all domains holds every core, and to bind each thread of the team to every
+                 * core removes the binding that the OpenMP runtime gave it (OMP_PROC_BIND, OMP_PLACES).
                  */
-                if(::omp_in_parallel() != 0)
+                if(::omp_in_parallel() != 0 || m_numaIdx == internal::hwloc::allDomains)
                     shouldSetThreadAffinity = false;
 
                 auto fn = [&kernelBundle,
