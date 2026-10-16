@@ -145,8 +145,22 @@ namespace alpaka::onHost
                 }
                 else
                 {
-#    pragma omp parallel
-                    fn();
+                    /* The team has no more threads than the launch has blocks: a thread without a block would only
+                     * wake and then wait at the end of the region. A launch of one block runs on the calling thread
+                     * with no region at all; its worksharing loop is then an orphaned construct, which a team of one
+                     * thread runs. */
+                    auto const numBlocks = m_threadSpec.getNumBlocks().product();
+                    auto const maxThreads = static_cast<ALPAKA_TYPEOF(numBlocks)>(::omp_get_max_threads());
+                    int const teamSize = static_cast<int>(numBlocks < maxThreads ? numBlocks : maxThreads);
+                    if(teamSize <= 1)
+                    {
+                        fn();
+                    }
+                    else
+                    {
+#    pragma omp parallel num_threads(teamSize)
+                        fn();
+                    }
                 }
             }
 
