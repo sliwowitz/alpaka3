@@ -10,6 +10,7 @@
 #include "alpaka/api/host/block/sync/NoOp.hpp"
 #include "alpaka/api/host/hwloc/utility.hpp"
 #include "alpaka/core/Dict.hpp"
+#include "alpaka/core/OmpSchedule.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/meta/NdLoop.hpp"
 #include "alpaka/onAcc/Acc.hpp"
@@ -105,12 +106,28 @@ namespace alpaka::onHost
                         additionalDict));
 
                     using ThreadIdxType = typename NumThreadsVecType::value_type;
-#    pragma omp for nowait
-                    for(ThreadIdxType i = 0; i < blockCount.product(); ++i)
+                    /* The kernel states how the team shares its blocks (alpaka/core/OmpSchedule.hpp). The two loops
+                     * are the same but for the schedule, which OpenMP takes only as a clause of the construct. */
+                    if constexpr(
+                        ompScheduleOf<typename ALPAKA_TYPEOF(kernelBundle)::KernelFn> == OmpSchedule::Dynamic)
                     {
-                        blockIdx = mapToND(blockCount, i);
-                        kernelBundle(acc);
-                        blockSharedMem.reset();
+#    pragma omp for schedule(dynamic) nowait
+                        for(ThreadIdxType i = 0; i < blockCount.product(); ++i)
+                        {
+                            blockIdx = mapToND(blockCount, i);
+                            kernelBundle(acc);
+                            blockSharedMem.reset();
+                        }
+                    }
+                    else
+                    {
+#    pragma omp for nowait
+                        for(ThreadIdxType i = 0; i < blockCount.product(); ++i)
+                        {
+                            blockIdx = mapToND(blockCount, i);
+                            kernelBundle(acc);
+                            blockSharedMem.reset();
+                        }
                     }
                 };
 

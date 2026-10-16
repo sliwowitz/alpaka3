@@ -18,6 +18,7 @@
 #include "alpaka/api/unifiedCudaHip.hpp"
 #include "alpaka/apply.hpp"
 #include "alpaka/core/Dict.hpp"
+#include "alpaka/core/OmpSchedule.hpp"
 #include "alpaka/core/Tag.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/core/config.hpp"
