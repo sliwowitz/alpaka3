@@ -6,6 +6,7 @@
 
 #include "alpaka/Vec.hpp"
 #include "alpaka/mem/FlatIdxContainer.hpp"
+#include "alpaka/mem/RunIdxContainer.hpp"
 #include "alpaka/mem/TiledIdxContainer.hpp"
 
 namespace alpaka::onAcc
@@ -51,5 +52,25 @@ namespace alpaka::onAcc
         };
 
         constexpr auto tiled = Tiled{};
+
+        /** Traversing a one-dimensional index domain by runs
+         *
+         * A worker gets the runs of its indices instead of its indices (@see RunIdxContainer): one run with the
+         * contiguous layout, runs of one index each with the strided layout. Each run is an alpaka::IdxRange that the
+         * worker walks itself, for example with one loop over all its indices.
+         */
+        struct Runs
+        {
+            ALPAKA_FN_HOST_ACC static constexpr auto make(
+                auto const& idxRange,
+                auto const& threadSpace,
+                auto const& idxLayout,
+                alpaka::concepts::CVector auto const& cSelect)
+            {
+                return RunIdxContainer{idxRange, threadSpace, idxLayout, cSelect};
+            }
+        };
+
+        constexpr auto runs = Runs{};
     } // namespace traverse
 } // namespace alpaka::onAcc
