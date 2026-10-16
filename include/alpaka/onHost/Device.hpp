@@ -181,6 +181,21 @@ namespace alpaka::onHost
             return internal::GetDeviceProperties::Op<ALPAKA_TYPEOF(*m_device.get())>{}(*m_device.get());
         }
 
+        /** The number of threads of an executor that run at the same time on this device.
+         *
+         * A code that cuts its work into pieces for a launch reads this number: one piece for each thread that runs
+         * at once keeps every thread busy. A host executor runs one thread in a block, so its blocks run as many at
+         * once as the executor has threads: the team of OpenMP that a launch from the calling thread opens, the
+         * arena of TBB, or the one thread of the serial executor. A GPU runs one block of the largest size on each
+         * multiprocessor at least.
+         */
+        uint32_t getConcurrency(alpaka::concepts::Executor auto executor) const
+        {
+            return internal::GetConcurrency::Op<ALPAKA_TYPEOF(*m_device.get()), ALPAKA_TYPEOF(executor)>{}(
+                *m_device.get(),
+                executor);
+        }
+
         size_t getFreeGlobalMemBytes() const
         {
             return internal::GetFreeGlobalMemBytes::Op<ALPAKA_TYPEOF(*m_device.get())>{}(*m_device.get());

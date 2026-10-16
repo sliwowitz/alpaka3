@@ -24,6 +24,10 @@
 #include <memory>
 #include <sstream>
 
+#if ALPAKA_TBB
+#    include <oneapi/tbb/task_arena.h>
+#endif
+
 namespace alpaka::onHost
 {
     namespace cpu
@@ -225,6 +229,40 @@ namespace alpaka::onHost
 
     namespace internal
     {
+        /// The serial executor runs every block on the calling thread.
+        template<typename T_Platform>
+        struct GetConcurrency::Op<cpu::Device<T_Platform>, exec::CpuSerial>
+        {
+            uint32_t operator()(cpu::Device<T_Platform> const&, exec::CpuSerial) const
+            {
+                return 1u;
+            }
+        };
+#if ALPAKA_OMP
+        /** The OpenMP executor runs the blocks on the team of the calling thread: the team that a launch opens, or
+         * the team of the parallel region that the calling thread is in, which the launch then shares.
+         */
+        template<typename T_Platform>
+        struct GetConcurrency::Op<cpu::Device<T_Platform>, exec::CpuOmpBlocks>
+        {
+            uint32_t operator()(cpu::Device<T_Platform> const&, exec::CpuOmpBlocks) const
+            {
+                return static_cast<uint32_t>(::omp_in_parallel() != 0 ? ::omp_get_num_threads() : ::omp_get_max_threads());
+            }
+        };
+#endif
+#if ALPAKA_TBB
+        /// The TBB executor runs the blocks in the arena of the calling thread.
+        template<typename T_Platform>
+        struct GetConcurrency::Op<cpu::Device<T_Platform>, exec::CpuTbbBlocks>
+        {
+            uint32_t operator()(cpu::Device<T_Platform> const&, exec::CpuTbbBlocks) const
+            {
+                return static_cast<uint32_t>(oneapi::tbb::this_task_arena::max_concurrency());
+            }
+        };
+#endif
+
         template<typename T_Type, typename T_Platform, alpaka::concepts::Vector T_Extents>
         struct Alloc::Op<T_Type, cpu::Device<T_Platform>, T_Extents>
         {

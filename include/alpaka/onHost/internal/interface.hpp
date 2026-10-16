@@ -458,6 +458,24 @@ namespace alpaka::onHost
             };
         };
 
+        /** The number of threads of an executor that run at the same time on a device.
+         *
+         * The default reads the properties of the device: one block of the largest size on each multiprocessor. An
+         * executor whose blocks run on a pool of threads specializes the operation with the size of the pool.
+         */
+        struct GetConcurrency
+        {
+            template<typename T_Device, typename T_Executor>
+            struct Op
+            {
+                uint32_t operator()(auto const& device, T_Executor) const
+                {
+                    DeviceProperties const properties = GetDeviceProperties::Op<T_Device>{}(device);
+                    return properties.multiProcessorCount * properties.maxThreadsPerBlock;
+                }
+            };
+        };
+
         struct GetFreeGlobalMemBytes
         {
             template<typename T_Any>
