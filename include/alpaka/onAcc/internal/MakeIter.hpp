@@ -53,6 +53,11 @@ namespace alpaka::onAcc::internal
         {
         };
 
+        template<>
+        struct IsIdxTraversing<traverse::Runs> : std::true_type
+        {
+        };
+
         template<typename T>
         constexpr bool isIdxTraversing_v = IsIdxTraversing<T>::value;
 
