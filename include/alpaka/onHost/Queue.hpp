@@ -399,6 +399,35 @@ namespace alpaka::onHost
             std::decay_t<decltype(extentsVec)>>{}(*queue.get(), ALPAKA_FORWARD(dest), byteValue, extentsVec);
     }
 
+    /** Move the pages of a view of unified memory to the device of the queue, in the order of the queue.
+     *
+     * A prefetch is a hint. An API whose unified memory does not move pages ignores it, and so does memory that is
+     * not unified.
+     * @param view a view or container of unified memory (onHost::allocUnified), of one dimension
+     */
+    template<typename T_Device, alpaka::concepts::QueuePolicyList T_Policies>
+    inline void prefetch(Queue<T_Device, T_Policies> const& queue, auto&& view)
+    {
+        internal::Prefetch::Op<std::decay_t<decltype(*queue.get())>, std::decay_t<decltype(view)>>{}(
+            *queue.get(),
+            ALPAKA_FORWARD(view),
+            false);
+    }
+
+    /** Move the pages of a view of unified memory to the host, in the order of the queue.
+     *
+     * A prefetch is a hint, as for prefetch().
+     * @param view a view or container of unified memory (onHost::allocUnified), of one dimension
+     */
+    template<typename T_Device, alpaka::concepts::QueuePolicyList T_Policies>
+    inline void prefetchToHost(Queue<T_Device, T_Policies> const& queue, auto&& view)
+    {
+        internal::Prefetch::Op<std::decay_t<decltype(*queue.get())>, std::decay_t<decltype(view)>>{}(
+            *queue.get(),
+            ALPAKA_FORWARD(view),
+            true);
+    }
+
     /** fill memory element wise
      *
      * @param[in,out] dest can be a container/view where the data should be written to
