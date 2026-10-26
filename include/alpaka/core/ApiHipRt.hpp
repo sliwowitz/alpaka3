@@ -403,6 +403,14 @@ namespace alpaka
             return ::hipMemsetAsync(devPtr, value, count, stream);
         }
 
+        /// Move the pages of a managed range to a device, or to the host for cpuDeviceId, in the order of a stream.
+        static inline Error_t memPrefetchAsync(void const* devPtr, size_t count, int device, Stream_t stream)
+        {
+            return ::hipMemPrefetchAsync(devPtr, count, device, stream);
+        }
+
+        static constexpr int cpuDeviceId = hipCpuDeviceId;
+
         static inline Error_t setDevice(int device)
         {
             return ::hipSetDevice(device);

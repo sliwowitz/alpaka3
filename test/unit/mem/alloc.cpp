@@ -109,6 +109,36 @@ TEMPLATE_LIST_TEST_CASE("alloc", "", TestBackends)
     allocDeferredImplicitWait(device, exec);
 }
 
+TEMPLATE_LIST_TEST_CASE("prefetch keeps the values of unified memory", "", TestBackends)
+{
+    auto deviceExec = test::getDeviceExecutorOrSkipTest(TestType::makeDict());
+    onHost::Device device = test::getDevice(deviceExec);
+    concepts::Executor auto exec = test::getExecutor(deviceExec);
+
+    int dataSize = 42;
+    auto unifiedView = onHost::allocUnified<int>(device, dataSize);
+    for(int i = 0; i < dataSize; ++i)
+        unifiedView[i] = i;
+
+    // the pages move to the device, and a kernel there reads the values that the host wrote
+    auto deviceQueue = device.makeQueue();
+    onHost::prefetch(deviceQueue, unifiedView);
+    onHost::wait(deviceQueue);
+    validateAccess(device, exec, unifiedView);
+
+    // the pages move back, and the host reads the same values
+    onHost::prefetchToHost(deviceQueue, unifiedView);
+    onHost::wait(deviceQueue);
+    for(int i = 0; i < dataSize; ++i)
+        CHECK(unifiedView[i] == i);
+
+    // a prefetch of no elements does nothing
+    auto emptyView = onHost::allocUnified<int>(device, 0);
+    onHost::prefetch(deviceQueue, emptyView);
+    onHost::prefetchToHost(deviceQueue, emptyView);
+    onHost::wait(deviceQueue);
+}
+
 using TestDeviceSpecs = std::decay_t<decltype(onHost::getDeviceSpecsFor(onHost::enabledApis))>;
 
 TEMPLATE_LIST_TEST_CASE("alloc zero bytes", "", TestDeviceSpecs)

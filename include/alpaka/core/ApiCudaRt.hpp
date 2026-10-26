@@ -365,6 +365,27 @@ namespace alpaka
             return ::cudaMemsetAsync(devPtr, value, count, stream);
         }
 
+        /** Move the pages of a managed range to a device, or to the host for cpuDeviceId, in the order of a stream.
+         *  CUDA 13 takes the target as a memory location; CUDA 12.2 to 12.9 name that form cudaMemPrefetchAsync_v2.
+         */
+        static inline Error_t memPrefetchAsync(void const* devPtr, size_t count, int device, Stream_t stream)
+        {
+#    if CUDART_VERSION >= 12020
+            cudaMemLocation location{};
+            location.type = device == cudaCpuDeviceId ? cudaMemLocationTypeHost : cudaMemLocationTypeDevice;
+            location.id = device == cudaCpuDeviceId ? 0 : device;
+#        if CUDART_VERSION >= 13000
+            return ::cudaMemPrefetchAsync(devPtr, count, location, 0, stream);
+#        else
+            return ::cudaMemPrefetchAsync_v2(devPtr, count, location, 0, stream);
+#        endif
+#    else
+            return ::cudaMemPrefetchAsync(devPtr, count, device, stream);
+#    endif
+        }
+
+        static constexpr int cpuDeviceId = cudaCpuDeviceId;
+
         static inline Error_t setDevice(int device)
         {
             return ::cudaSetDevice(device);

@@ -250,6 +250,7 @@ namespace alpaka::onHost
             friend struct onHost::internal::Memcpy;
             friend struct onHost::internal::MemcpyDeviceGlobal;
             friend struct onHost::internal::Memset;
+            friend struct onHost::internal::Prefetch;
             friend struct onHost::internal::AllocDeferred;
             friend struct CallKernel;
         };
@@ -861,6 +862,32 @@ namespace alpaka::onHost
                     ApiInterface::memcpyAsync(destPtr, srcPtr, sizeof(T), copyKind, internal::getNativeHandle(queue)));
 
                 queue.conditionalWait();
+            }
+        };
+
+        template<typename T_Device, typename T_View>
+        struct Prefetch::Op<unifiedCudaHip::Queue<T_Device>, T_View>
+        {
+            void operator()(unifiedCudaHip::Queue<T_Device>& queue, auto&& view, bool toHost) const
+            {
+                ALPAKA_LOG_FUNCTION(onHost::logger::memory + onHost::logger::queue);
+                using ApiInterface = typename unifiedCudaHip::Queue<T_Device>::ApiInterface;
+                static_assert(
+                    alpaka::trait::getDim_v<ALPAKA_TYPEOF(internal::getExtents(view))> == 1u,
+                    "a prefetch takes a view of one dimension");
+
+                auto const count = pCast<size_t>(internal::getExtents(view)).x();
+                if(count == size_t{0u})
+                    return;
+                int const device = onHost::getNativeHandle(queue.m_device);
+                ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(ApiInterface, ApiInterface::setDevice(device));
+                ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
+                    ApiInterface,
+                    ApiInterface::memPrefetchAsync(
+                        toVoidPtr(onHost::data(view)),
+                        count * sizeof(alpaka::GetValueType_t<T_View>),
+                        toHost ? ApiInterface::cpuDeviceId : device,
+                        internal::getNativeHandle(queue)));
             }
         };
 

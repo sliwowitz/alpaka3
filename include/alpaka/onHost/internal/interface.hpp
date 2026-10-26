@@ -438,6 +438,22 @@ namespace alpaka::onHost
             };
         };
 
+        /** Move the pages of a range of unified memory towards where it is read next.
+         *
+         * A prefetch is a hint: the primary template does nothing, and an API whose unified memory moves pages
+         * specializes it. toHost moves the pages to the host, else to the device of the queue.
+         */
+        struct Prefetch
+        {
+            template<typename T_Queue, typename T_View>
+            struct Op
+            {
+                void operator()(T_Queue&, auto&&, bool) const
+                {
+                }
+            };
+        };
+
         struct Fill
         {
             template<typename T_Queue, typename T_Dest, typename T_Value, typename T_Extents>
